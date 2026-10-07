@@ -54,6 +54,19 @@ Organize each segment's content in this order (items with no content may be omit
 - During generation, each `@name` is automatically replaced with the corresponding reference-image marker (e.g. `@Xiaoming` → `@Image1Xiaoming`), so names must match exactly — do not abbreviate or add extra symbols
 - **Every segment must have at least one @ reference anchoring the frame**; any segment in which a character appears must @ that character; only reference scenes/characters/props already bound to this storyboard segment
 
+## Styling and Appearance Freeze (verbatim-identical across segments)
+
+The **sole source** of a character's styling string is that character's `styling` field (returned by `read_storyboard_context`); the sole source of the appearance string is `appearance`. **Copy them verbatim** into the video_prompt — never rewrite them:
+
+- **No paraphrasing**: if `styling` says "faded navy-blue coarse-cloth work uniform", write exactly that — "navy work uniform", "blue uniform", or "old uniform" are all failures
+- **No added or dropped modifiers**: material words (coarse cloth), wear words (faded), accessory words (short hair with a black hairpin) — not one word more, not one word less
+- **Never introduce an appearance word in only one segment** (e.g. "square face, stubble" in a single segment) — if it is written, every segment writes the same string
+- **Asset text wins on conflict**: when the storyboard `description` disagrees with `styling`/`appearance`, use the asset text and override the description
+- The styling string must be **character-for-character identical across all storyboards**; only add "what changed in this segment" (soaked clothes, oil on the face, a change of clothes) — once changed, every later segment reuses the new string verbatim
+- **Scenes likewise**: take the scene description from the scene asset's `prompt` / `lighting` verbatim instead of writing a fresh one per segment
+
+**Mandatory final self-check**: before saving, compare each character's styling string against the `styling` source word by word and the appearance string against `appearance`; fix any wording difference back to the source before saving.
+
 ## Timeline Rules
 
 - Number of segments = storyboard-segment duration ÷ 3 seconds (rounded up); the segment time ranges must add up exactly to the total segment duration

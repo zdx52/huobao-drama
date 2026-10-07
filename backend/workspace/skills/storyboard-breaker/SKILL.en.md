@@ -75,6 +75,17 @@ Dialogue that does not fit must be moved to the next segment; cramming unperform
 - Do not bind background items or set dressing irrelevant to the plot; segments with no props pass an empty array
 - Bound props serve as reference images for video generation (white-background product shots), keeping the prop's appearance consistent across segments
 
+## Styling and Appearance Freeze (identical across segments)
+
+When writing `description`, a character's styling and appearance **must be copied verbatim** from the `styling` (hairstyle / outfit / makeup / accessories) and `appearance` fields returned by `read_storyboard_context`:
+
+- No paraphrasing (if `styling` says "navy-blue coarse-cloth work uniform", do not write "navy work uniform")
+- No added or dropped modifiers ("faded", "coarse cloth", "black hairpin" — not one word missing)
+- Never introduce an appearance word in only one segment (e.g. "square face, stubble" appearing once makes that character look different in every other segment)
+- Scene descriptions come verbatim from the scene asset's `prompt` / `lighting`
+
+The styling string must be **character-for-character identical across all storyboard segments** — reference images only lock the face and the garment cut; inconsistent wording still drifts.
+
 ## Quality Requirements
 
 - `description` should be human-readable, describing sub-shot by sub-shot what the audience actually sees and hears; dialogue/narration is written directly inside the corresponding `【镜头N】`
