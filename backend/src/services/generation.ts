@@ -211,11 +211,15 @@ export async function generateVideo(params: GenerateVideoParams): Promise<number
     : await getActiveConfig('video')
   if (!config) throw new Error('未配置视频模型，请先到「设置」页添加并启用 AI 服务')
 
-  // 妆造/外观机械兜底 + 脸格加强：仅在 prompt 非空时处理（空 prompt 保持原样）
+  // 妆造/外观机械兜底 + 脸格加强 + 链上第 2 段起的 hold 头：仅在 prompt 非空时处理
   const basePrompt = String(params.prompt || '')
+  // 单段重拍（chainSegment>=2）同样钉着上一段尾音频 → 也要 hold 头；
+  // 链 runner 侧不再自己加（避免重复前置）。
+  const holdHead = Number(params.chainSegment || 0) >= 2 ? AIRLOCK_HEAD : ''
+  const body0 = holdHead + basePrompt
   const refUrls = [...(params.referenceImageUrls || [])]
   let lock = ''
-  if (basePrompt.trim()) {
+  if (body0.trim()) {
     const rows = await storyboardCharacterRows(params.storyboardId)
     const faceRefs: { name: string; picNo: number }[] = []
     for (const c of rows) {
@@ -225,9 +229,9 @@ export async function generateVideo(params: GenerateVideoParams): Promise<number
       refUrls.push(dataUrl)
       faceRefs.push({ name: String(c.name || '').trim(), picNo: refUrls.length })
     }
-    lock = buildVerbatimLock(rows, faceRefs, Math.max(240, 6800 - basePrompt.length))
+    lock = buildVerbatimLock(rows, faceRefs, Math.max(240, 6800 - body0.length))
   }
-  const finalPrompt = basePrompt + lock
+  const finalPrompt = body0 + lock
 
   const id = await createTask('video', config, {
     storyboardId: params.storyboardId,
@@ -691,7 +695,7 @@ async function handleVideoComplete(record: SysTaskRecord, videoUrl: string, dura
       await generateVideo({
         storyboardId: next.storyboard_id,
         dramaId: next.drama_id ?? record.dramaId,
-        prompt: AIRLOCK_HEAD + String(next.prompt || ''),
+        prompt: String(next.prompt || ''),
         model: next.model,
         referenceMode: 'reference',
         imageUrl: next.image_url,
