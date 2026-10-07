@@ -21,6 +21,11 @@ jobs:
           npm ci
           npm run generate
 
+      - name: Backend deps (esbuild resolution only)
+        run: |
+          cd backend
+          npm ci --ignore-scripts
+
       - name: Desktop dist (unsigned)
         run: |
           cd desktop
