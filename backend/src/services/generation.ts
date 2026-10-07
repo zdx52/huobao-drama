@@ -150,6 +150,24 @@ async function storyboardCharacterRows(storyboardId?: number): Promise<any[]> {
   }
 }
 
+/** 该分镜的环境音字段 → 官方 overall_soundscape 段（防模型在安静镜头里自己脑补人声）。
+ *  官方指南原话：安静的镜头若冒出你没要求的人声，就把音频字段写明再重跑。
+ *  配乐字段 bgm_prompt 默认**不带**（写 N/A），避免模型自由加配乐；将来要 H3 出配乐再把 music 传进来。 */
+async function storyboardAudioFields(storyboardId?: number): Promise<{ ambience: string; music: string }> {
+  const sid = Number(storyboardId)
+  if (!Number.isFinite(sid) || sid <= 0) return { ambience: '', music: '' }
+  try {
+    const rows = await db
+      .select({ amb: schema.storyboards.soundEffect, mus: schema.storyboards.bgmPrompt })
+      .from(schema.storyboards)
+      .where(eq(schema.storyboards.id, sid))
+    const r: any = rows[0]
+    return { ambience: String(r?.amb || '').trim(), music: String(r?.mus || '').trim() }
+  } catch {
+    return { ambience: '', music: '' }
+  }
+}
+
 /** 参考板脸格裁切（2026-10-07）：角色板是「一帧四格」（正/左侧/背 无头 + 脸部特写，脸在最右），
  *  另切出最右 1/4 当独立参考图，把脸部像素信息量放大 4 倍（整块板仍照常发送）。
  *  视频参考图走原尺寸不压缩（readImageAsDataUrl），所以切出的脸格是原始像素。 */
@@ -177,7 +195,12 @@ async function facePanelDataUrl(imageUrl?: string | null): Promise<string> {
  *  LLM 写提示词时会漏句/调序/改写（同一套规则实测"好一段坏一段"），这里在提交前用数据库原文兜底。
  *  块以 `verbatim_lock：` 起头；中转（shim）会把它保留成独立段落、不并入镜头。
  *  budget 内按「脸图 → styling → appearance、整行取舍」截断，避免撞上供应商 7000 字符上限。 */
-function buildVerbatimLock(rows: any[], faceRefs: { name: string; picNo: number }[], budget: number): string {
+function buildVerbatimLock(
+  rows: any[],
+  faceRefs: { name: string; picNo: number }[],
+  audio: { ambience: string; music: string },
+  budget: number,
+): string {
   if (!rows.length) return ''
   const head =
     '\nverbatim_lock：以下妆造/外观字符串取自角色资产原文，逐字使用——不得改写、不得省略任何从句、不得调整顺序；' +
@@ -194,9 +217,12 @@ function buildVerbatimLock(rows: any[], faceRefs: { name: string; picNo: number 
   const face = faceRefs.map(
     (f) => `face_ref：<Picture ${f.picNo}> 是 ${f.name} 的脸部特写裁切（面部身份以此为准；服装与体型仍以角色板为准）`,
   )
+  const audioLine = audio.ambience
+    ? `audio_lock：overall_soundscape=${audio.ambience}｜non_diegetic_music=N/A`
+    : ''
   const picked: string[] = []
   let used = head.length
-  for (const line of [...face, ...styl, ...app]) {
+  for (const line of [...(audioLine ? [audioLine] : []), ...face, ...styl, ...app]) {
     if (used + line.length + 1 > budget) break
     picked.push(line)
     used += line.length + 1
@@ -229,7 +255,7 @@ export async function generateVideo(params: GenerateVideoParams): Promise<number
       refUrls.push(dataUrl)
       faceRefs.push({ name: String(c.name || '').trim(), picNo: refUrls.length })
     }
-    lock = buildVerbatimLock(rows, faceRefs, Math.max(240, 6800 - body0.length))
+    lock = buildVerbatimLock(rows, faceRefs, await storyboardAudioFields(params.storyboardId), Math.max(240, 6800 - body0.length))
   }
   const finalPrompt = body0 + lock
 
