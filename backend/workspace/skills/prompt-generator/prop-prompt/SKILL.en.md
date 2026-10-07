@@ -23,6 +23,17 @@ background clean and carrying no narrative content, no other objects, no people,
 soft even studio light, faint shadows, high detail
 ```
 
+## In-frame Text (Hard Rule)
+
+**Text on the prop itself must be written out verbatim** — front-of-pack copy, labels, book titles, seal characters, engravings, nameplate digits. Saying only "there is text on the surface" without giving the content always produces garbled glyphs.
+
+- **Has text**: put the exact text in quotes and state where it sits (e.g. `the front of the pack reads "Yunnan Baiyao"`, `the cover reads "Spring and Autumn" in vertical type`)
+  - **Keep it short**: ≤6 Chinese characters, or ≤2 words in English/digits
+  - Copy the text **verbatim** from the prop asset's `name`/`description` — **never rewrite, never invent**; if `description` omits it but the prop must bear text (e.g. a book title), give the shortest form consistent with the story
+  - When the prop bears text (titles, seals, signatures, engravings), `description` must fix the surface text verbatim per the story, and the video_prompt must carry it over unchanged
+- **No text**: state explicitly "there is no text on the prop's surface" — **never leave it blank for the model to improvise**
+- **Forbidden**: phrasings such as "some text on the surface" / "Chinese characters on the packaging"
+
 ## Generation Rules
 
 - Build around the prop's `name` and `description` (physical appearance): material, color, shape, size, degree of wear, signs of damage, and other physical details must be **carried through item by item** — they are the source of the prop's recognizability
@@ -36,7 +47,7 @@ soft even studio light, faint shadows, high detail
 
 - Hands holding it, people, other objects, or scene environment in frame
 - Packaging, bases, display stands (unless they are part of the prop itself)
-- Text, watermarks, signatures (text and graphics printed on the prop itself may be kept and described)
+- Watermarks, signatures (text printed on the prop itself must be spelled out **verbatim** per the "In-frame Text" rule above, and may be kept and described)
 - Environmental reflections, colored light
 - Exaggerated perspective, distortion, proportion errors, edge cropping
 

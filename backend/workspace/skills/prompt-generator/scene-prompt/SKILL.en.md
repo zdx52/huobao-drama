@@ -34,6 +34,18 @@ The space must be **readable, consistent, and reusable**:
 - **Floor and walls**: make material, color, and condition specific (e.g. "oil stains on the concrete floor", "mottled lime plaster on the walls")
 - **Key set dressing**: write 2-4 core pieces and their **fixed relative positions** (e.g. "the assembly line runs along the wall, ending at the bar counter"); the left-right/near-far relationships among pieces must be self-consistent — do not just list item names
 
+## In-frame Text (Hard Rule)
+
+**Any text that appears in the image must be written out verbatim in the prompt** — vague phrasings like "some characters on the signboard" always make the model invent garbage (garbled glyphs, fake characters, wrong characters). This is the single most common way scene images fail.
+
+- **Default: no text** — for scenes that do not involve text, state explicitly "no text, letters, digits, or watermarks appear in the frame"
+- **When text is required** (shop signs, door plates, street signs, banners/slogans, posters, newspaper/book titles, labels and packaging, on-screen subtitles, seals/inscriptions, clock digits):
+  - Put the exact text in **quotes** and state the **position + carrier**: `a wooden signboard on the left wall reads "Lao Zhang Noodle House"`
+  - **Keep it short**: ≤6 Chinese characters, or ≤2 words in English/digits — longer text blurs and gets misspelled
+  - Priority for the text content: ① text already present in the scene asset's `prompt`/`location` → **copy it verbatim, never rewrite**; ② asset gives none but the frame must have text (e.g. "convenience store", "police station") → use the **shortest** form derived from `location`, appearing once; ③ unsure → treat as "no text", do not invent
+  - You may add **font and color** to help the model render it correctly (e.g. "red bold sans-serif")
+- **Forbidden**: phrasings such as `the signboard has Chinese characters` / `some words are written on the wall` / `the text on the plate is legible` — i.e. requiring text without giving its content
+
 ## People (Hard Rule · Highest Priority)
 
 **No people of any kind may appear in the scene image — keep only the scene itself.**
@@ -54,7 +66,7 @@ All set dressing, period texture, and key visual elements in `prompt` (scene des
 ## Prohibitions
 
 - Any people — **no people of any kind may appear in the scene image; keep only the scene itself**
-- Text, readable text on signboards, watermarks, signatures
+- Watermarks, signatures (when the frame needs text, spell it out **verbatim** per the "In-frame Text" rule above; never ask for text without giving its content)
 - Motion blur, objects in motion (the scene reference image must be still and stable)
 - Merely listing set dressing without giving relative positions (the spatial structure must be continuous and self-consistent)
 

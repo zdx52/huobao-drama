@@ -52,7 +52,7 @@ export async function ensureSceneFinalPrompt(scene: SceneRow, episodeId: number,
   try {
     logTaskProgress('FinalPrompt', 'scene-generate', { sceneId: scene.id, episodeId })
     await runPromptAgent(episodeId, scene.dramaId,
-      `为场景「${scene.location}」(scene_id=${scene.id}) 生成固定视角（前景/中景/后景）最终提示词，并调用 save_scene_final_prompt 保存。注意：这是无人物空镜——场景图中不能出现任何的人（含背影、剪影、倒影、照片里的人），即使场景描述提到人物活动也必须剔除，只保留场景本身。`, opts)
+      `为场景「${scene.location}」(scene_id=${scene.id}) 生成固定视角（前景/中景/后景）最终提示词，并调用 save_scene_final_prompt 保存。注意：这是无人物空镜——场景图中不能出现任何的人（含背影、剪影、倒影、照片里的人），即使场景描述提到人物活动也必须剔除，只保留场景本身。画面内文字按硬性规则处理：若该场景可能出现文字（招牌店招、门牌路牌、横幅标语、海报、报纸书刊标题、标签包装、屏幕字幕、印章题字），必须在提示词里用引号逐字写出要显示的文字（中文 ≤6 字、英文/数字 ≤2 个词）并写明位置载体；文字优先逐字照抄资产原文，禁止改写或自己编；确实没有文字就明确写"画面中不出现任何文字、字母、数字、水印"。禁止只说"招牌上有汉字/墙上有字"而不给出具体内容。`, opts)
     const [fresh] = await db.select().from(schema.scenes).where(eq(schema.scenes.id, scene.id))
     return fresh?.finalPrompt || ''
   } catch (err: any) {
@@ -67,7 +67,7 @@ export async function ensurePropFinalPrompt(prop: PropRow, episodeId: number, fo
   try {
     logTaskProgress('FinalPrompt', 'prop-generate', { propId: prop.id, episodeId })
     await runPromptAgent(episodeId, prop.dramaId,
-      `为道具「${prop.name}」(prop_id=${prop.id}) 生成白底单品最终提示词，并调用 save_prop_final_prompt 保存。`, opts)
+      `为道具「${prop.name}」(prop_id=${prop.id}) 生成白底单品最终提示词，并调用 save_prop_final_prompt 保存。画面内文字按硬性规则处理：道具本体上的文字（包装正面字、标签、书名、印章字样、刻字、铭牌数字）必须在提示词里用引号逐字写出原文（中文 ≤6 字、英文/数字 ≤2 个词）并写明位置；文字逐字照抄资产 name/description，禁止改写或自己编；无字则明确写"道具表面没有任何文字"，不许留白让模型自由发挥。禁止只说"表面有文字"而不给出具体内容。`, opts)
     const [fresh] = await db.select().from(schema.props).where(eq(schema.props.id, prop.id))
     return fresh?.finalPrompt || ''
   } catch (err: any) {
