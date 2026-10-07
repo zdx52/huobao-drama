@@ -36,11 +36,14 @@ interface GenerateImageParams {
   configId?: number
 }
 
-/** 续拍 airlock 头（runner 在第 2 段起自动前置）：hold 上段结尾 + 首句重复尾词 */
+/** 续拍 airlock 头（runner 在第 2 段起自动前置）：hold 上段结尾构图约 2 秒（无台词 + 微动作）再切新构图。
+ *  对齐作者口径（README「Writing prompts for a chain」）：不要在同一时刻同时要"变化"和"延续"；
+ *  跳过 airlock 的接缝会像两个房间拼在一起；hold 段必须无台词，只给呼吸/重心/视线微动作。
+ *  2026-10-07：删掉自加的"首句重复上段尾词"（作者无此条，且换场景段没有文字落点）。 */
 const AIRLOCK_HEAD =
-  '[续拍] Hold the exact closing framing of the previous segment for about 2 seconds, ' +
-  'no camera move, performers keep a breath/weight-shift/eyeline micro-motion, then cut to the new setup. ' +
-  'Repeat the previous segment\u2019s last word/phrase as the first line (~0.9s of the head is trimmed). '
+  '[续拍] Open holding the exact closing framing of the previous segment for about 2 seconds: ' +
+  'no camera move, no dialogue, performers keep a breath/weight-shift/eyeline micro-motion, ' +
+  'then cut to the new setup. '
 
 interface GenerateVideoParams {
   storyboardId?: number

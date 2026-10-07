@@ -67,6 +67,16 @@ The **sole source** of a character's styling string is that character's `styling
 
 **Mandatory final self-check**: before saving, compare each character's styling string against the `styling` source word by word and the appearance string against `appearance`; fix any wording difference back to the source before saving.
 
+## Chain Carry-Over (never hand-written; the runner adds it)
+
+From segment 2 on, the **runner automatically prepends the airlock head** (hold the previous segment's closing framing for ~2s, no dialogue, a breath/weight-shift/eyeline micro-motion, then cut to the new setup). So, in the text:
+
+- **Never write a carry-over line**: no "continuing from the previous segment's closing framing", no "picking up from the last shot", and do not reuse the previous segment's last word/phrase as the first line — the auto-prepended airlock already does this
+- **Start the text at this segment's own new setup** (scene + camera position + subject state)
+- **Never describe both the old and the new framing in one segment**: the model renders contradictions as **unions** (previous segment ends on a close-up of A, this segment says "a two-shot of B and C" — you get all three). On a scene or subject change, write only the new scene and framing
+- **The hold carries no dialogue**: put dialogue after the cut to the new setup
+- About 0.9s of the head is trimmed on delivery, so beats shift earlier; write timecodes against the sampled timing and do not offset by hand (just be aware of the shift)
+
 ## Timeline Rules
 
 - Number of segments = storyboard-segment duration ÷ 3 seconds (rounded up); the segment time ranges must add up exactly to the total segment duration
