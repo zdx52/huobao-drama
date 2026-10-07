@@ -53,25 +53,35 @@ Organize each segment's content in this order (items with no content may be omit
 - `@PropName` — prop reference; the name must exactly match the name in the prop list; reference a prop when it is clearly visible in frame, used, or shown in close-up
 - During generation, each `@name` is automatically replaced with the corresponding reference-image marker (e.g. `@Xiaoming` → `@Image1Xiaoming`), so names must match exactly — do not abbreviate or add extra symbols
 - **Every segment must have at least one @ reference anchoring the frame**; any segment in which a character appears must @ that character; only reference scenes/characters/props already bound to this storyboard segment
-- **Multi-character segments must declare each character separately**: write every character's own `@name` in the header and **restate each character's own styling string in full** (never merge them into "both wear work uniforms" or share one description) — the relay builds one `<Subject N>` identity per entity, which is what stops the reference images from contaminating each other. Without it the model **averages several faces into one new face**.
-- **Point each shot at the panel of the character board**: the first time a character appears, state the board's panels and name the panel this shot uses. The board has **four panels** (left to right: face close-up / front full body / 90° left side full body / back full body — all three views **keep the head**); copy the panel name **verbatim** from one of these: `脸部特写格` / `正面全身格` / `90度左侧面全身格` / `背面全身格` (close-ups and tight shots take `脸部特写格`, full-body and medium shots take `正面全身格`); e.g. `@LinQiao (four-panel board: face close-up / front full body / 90° left side full body / back full body; this shot uses 脸部特写格)`. **Never invent a panel** (e.g. "hand panel"), **never name two panels at once**, never reword a panel name
-- **The relay auto-assembles the official R2V skeleton from the header**: `subject_definitions` (`<Subject N>` = who it is, `<Picture N>` = the Nth reference image), `retention_analysis: fully_preserved`, `detailed_description`, and it rewrites every `@name` in the body to `<Subject N>` — so the **header must be complete and its order must match the reference-image order**, or identities get bound to the wrong image
+- **Multi-character segments must declare each character separately**: write every character's own `@name` in the header, and make sure each character appearing in the body also gets `@name` at least once — **the name only, never a description**. The relay builds one `<Subject N>` identity per entity, which is what stops the reference images and cards from contaminating each other. Without it the model **averages several faces into one new face**.
+- **Point each shot at the panel of the character board** (once, on a character's first appearance): `@LinQiao (this shot uses 脸部特写格)`. The board has **four panels** (left to right: face close-up / front full body / 90° left side full body / back full body — all three views **keep the head**); copy the panel name **verbatim** from: `脸部特写格` / `正面全身格` / `90度左侧面全身格` / `背面全身格` (close-up → face panel, full-body/medium → front full-body panel). **Never invent a panel**, **never name two panels at once**, never reword a panel name
+- **The relay auto-assembles the official R2V skeleton from the header**: `subject_definitions` (`<Subject N>` = who it is, `<Picture N>` = the Nth reference image, `mod_N` = the Nth identity card — **all four share one number**), `retention_analysis: fully_preserved`, `detailed_description`, and it rewrites every `@name` in the body to `<Subject N>` — so the **header must be complete and its order must match the reference-image order**, or identities get bound to the wrong image
 
-## Styling and Appearance Freeze (verbatim-identical across segments)
+## Body slimming (mandatory, in force since 2026-10-08)
 
-The **sole source** of a character's styling string is that character's `styling` field (returned by `read_storyboard_context`); the sole source of the appearance string is `appearance`. **Copy them verbatim** into the video_prompt — never rewrite them:
+**Identity and appearance are not written in the body.** The body states only what happens and how it is filmed.
 
-- **No paraphrasing**: if `styling` says "faded navy-blue coarse-cloth work uniform", write exactly that — "navy work uniform", "blue uniform", or "old uniform" are all failures
-- **No added or dropped modifiers**: material words (coarse cloth), wear words (faded), accessory words (short hair with a black hairpin) — not one word more, not one word less
-- **Never introduce an appearance word in only one segment** (e.g. "square face, stubble" in a single segment) — if it is written, every segment writes the same string
-- **Asset text wins on conflict**: when the storyboard `description` disagrees with `styling`/`appearance`, use the asset text and override the description
-- The styling string must be **character-for-character identical across all storyboards**; only add "what changed in this segment" (soaked clothes, oil on the face, a change of clothes) — once changed, every later segment reuses the new string verbatim
-- **Scenes likewise**: take the scene description from the scene asset's `prompt` / `lighting` verbatim instead of writing a fresh one per segment
+Three layers already lock "what it looks like"; repeating them in the body burns characters and can contradict them:
 
-**Mandatory final self-check**: before saving, compare each character's styling string **clause by clause and in order** against the `styling` source (character-level alignment of the whole string), and the appearance string against `appearance`; **if any clause is missing, reworded or reordered, replace the whole styling string in the body with the verbatim source string** before saving.
+1. **Identity card**: `<Subject N>` ↔ the `mod_N` card slot (identity, hairstyle and outfit extracted from the character board)
+2. **Reference image**: `<Picture N>`
+3. **Machine-injected lock**: on submit, the relay pins the asset's `styling`/`appearance` and the scene's `prompt`/`lighting` verbatim into the tail of the prompt (`verbatim_lock`)
 
-- **Write the styling string as one continuous verbatim run**: as many clauses as the source has (split by `.`/`;`/`,`), in the same order, semicolons not turned into commas, **not one clause dropped**. Measured lesson: dropping "a pencil in the chest/waist pocket", "a strip of old cloth wrapped round the wrist" or "old labour shoes on his feet", or moving "hair styled as…" after the uniform, gives the model a fresh look in every segment — clothing and detail drift every time. **Include the closing summary clause** too (e.g. "neat and clean overall, the clothing washed pale but still tidy") — measured: that is the clause the model drops most often
-- **No visible hard detail may be dropped**: what is in the pocket/at the waist, what is on the hands and wrists, what is on the feet, patches and accessories — these are exactly what the model invents on its own
+What the body SHOULD contain:
+
+- Scene environment and lighting (may reference the scene asset, no fresh version per segment)
+- Camera position, shot size, movement; character actions and performance; plot beats; dialogue/narration; ambience
+- The `same exposure, same white balance, no new light source` lock; cuts
+
+What the body must NOT contain:
+
+- **Any character's appearance/styling**: face shape, hairstyle, features, build, clothing, accessories, wear-and-tear — none of it
+- **The `styling`/`appearance` source strings**: never copied into the body
+- **Re-statements**: the second time a character appears in the same segment, write only `@name` — no features again
+
+**Sole exception — appearance changes that happen in this segment**: soaked clothes, oil on the face, a change of clothes, an injury, a mask — states that differ from the card **must be written in the body** (the card and the lock only carry the unchanging baseline; change can only be expressed in the body). Once a change happens, later segments carry the changed state forward.
+
+**Mandatory final self-check**: scan the body before saving — **none of the characters' appearance/styling source strings may appear** (if one does, it was not slimmed; delete it); then confirm every character appearing has `@name` and the header order matches the reference-image order.
 
 ## Chain Carry-Over (never hand-written; the runner adds it)
 
