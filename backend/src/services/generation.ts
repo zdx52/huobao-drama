@@ -10,7 +10,6 @@ import { downloadFile, fetchImageAsCompressedDataUrl, generateImageThumb, getAbs
 import { STORAGE_ROOT } from '../utils/paths.js'
 import fs from 'fs'
 import path from 'path'
-import sharp from 'sharp'
 import { extractVideoPoster } from '../utils/video-poster.js'
 import { getImageAdapter, getVideoAdapter } from './adapters/registry'
 import type { AIConfig } from './adapters/types'
@@ -175,33 +174,12 @@ async function storyboardAudioFields(storyboardId?: number): Promise<{ ambience:
   }
 }
 
-/** 脸部特写格裁切（2026-10-08 新板）：角色板是「一帧四格」= 脸部特写（最左）/ 正面全身 / 90°左侧面全身 / 背面全身，
- *  三视图都有头。取**最左 1/4**（脸部特写格）当独立参考图，把脸部像素信息量放大 4 倍（整块板仍照常发送）。
- *  视频参考图走原尺寸不压缩（readImageAsDataUrl），所以切出的脸格是原始像素。 */
-async function facePanelDataUrl(imageUrl?: string | null): Promise<string> {
-  const raw = String(imageUrl || '').trim()
-  if (!raw.startsWith('static/') && !raw.startsWith('/static/')) return ''
-  try {
-    const abs = getAbsolutePath(raw.startsWith('/static/') ? raw.slice(1) : raw)
-    const meta = await sharp(abs).metadata()
-    const w = Number(meta.width || 0)
-    const h = Number(meta.height || 0)
-    if (w < 40 || h < 40) return ''
-    const cw = Math.max(16, Math.round(w * 0.25))
-    const buf = await sharp(abs)
-      .extract({ left: 0, top: 0, width: cw, height: h })
-      .jpeg({ quality: 92 })
-      .toBuffer()
-    return 'data:image/jpeg;base64,' + buf.toString('base64')
-  } catch {
-    return ''
-  }
-}
-
-/** 拼 verbatim_lock 块：角色 styling/appearance 原文 + 新增脸图的编号说明。
+/**
+ * 拼 verbatim_lock 块：角色 styling/appearance 原文（+ 可选的脸图编号说明）。
  *  LLM 写提示词时会漏句/调序/改写（同一套规则实测"好一段坏一段"），这里在提交前用数据库原文兜底。
  *  块以 `verbatim_lock：` 起头；中转（shim）会把它保留成独立段落、不并入镜头。
- *  budget 内按「脸图 → styling → appearance、整行取舍」截断，避免撞上供应商 7000 字符上限。 */
+ *  budget 内按「音频 → 脸图 → styling → appearance、整行取舍」截断，避免撞上供应商 7000 字符上限。
+ *  2026-10-08 起 faceRefs 恒为空（脸格裁切已下线，身份交给 RefMod 卡 + 参考图）。 */
 function buildVerbatimLock(
   rows: any[],
   faceRefs: { name: string; picNo: number }[],
@@ -254,15 +232,10 @@ export async function generateVideo(params: GenerateVideoParams): Promise<number
   let lock = ''
   if (body0.trim()) {
     const rows = await storyboardCharacterRows(params.storyboardId)
-    const faceRefs: { name: string; picNo: number }[] = []
-    for (const c of rows) {
-      if (refUrls.length >= 9) break // 供应商参考图上限 9
-      const dataUrl = await facePanelDataUrl(c.imageUrl)
-      if (!dataUrl || refUrls.includes(dataUrl)) continue
-      refUrls.push(dataUrl)
-      faceRefs.push({ name: String(c.name || '').trim(), picNo: refUrls.length })
-    }
-    lock = buildVerbatimLock(rows, faceRefs, await storyboardAudioFields(params.storyboardId), Math.max(240, 6800 - body0.length))
+    // 2026-10-08 去掉「脸格裁切追加」：角色板最左格本来就是脸部特写，而整板已作为参考图下发
+    // （且 RefMod 卡就是从整板抽的）——再裁一张等于是同一张脸给模型两遍，还白占参考图名额
+    // （上限 9）。身份/外观改由三重锁定负责：身份卡 + 参考图 + verbatim_lock。
+    lock = buildVerbatimLock(rows, [], await storyboardAudioFields(params.storyboardId), Math.max(240, 6800 - body0.length))
   }
   const finalPrompt = body0 + lock
 
