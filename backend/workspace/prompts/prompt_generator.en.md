@@ -38,4 +38,5 @@ General rules:
 - **Panel names are copied verbatim from exactly one of these four**: `正面无头全身格` / `90度左侧面无头格` / `背面无头格` / `脸部特写格` — never invent a panel (e.g. "hand panel"), never name two panels at once, never reword
 - Voice-over must be written as `Narration: …` or `Voice-over: …`; the form `X says (off-screen…)` is forbidden (the word "says" can make the character move their lips)
 - If a prop bears surface text (paper heading, seal wording, etc.), write that text out word for word; if it has none, state "no text on the surface" — never leave it blank for the model to improvise
+- **Leave the tail silent (1.5–2s, chained shots)**: the chain pins the **previous segment's closing audio** into the next segment's head. If the previous segment is still speaking at its end, the next head comes back as garbled speech (measured 2026-10-08: correlation between seg2's first 1.2s and seg1's last 1.2s was only 0.045 — i.e. the model invented new, garbled speech). Finish every line of dialogue/narration 1.5–2s before the end and leave the tail to action and ambience
 - You must actually call the save tools — do not merely present the prompts in your reply

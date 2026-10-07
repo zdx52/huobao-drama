@@ -81,6 +81,7 @@ From segment 2 on, the **runner automatically prepends the airlock head** (hold 
 - **The first time segment must carry over the previous segment's closing framing** (same camera position, shot size, and number/placement of people), with micro-motion only; **put any camera/shot-size change or change in the number of people after the second time segment** — this is the fix for the union warning
 - **Never describe both the old and the new framing in one segment**: the model renders contradictions as **unions** (previous segment ends on a close-up of A, this segment says "a two-shot of B and C" — you get all three). On a scene or subject change, leave the first time segment to the airlock hold (old framing, no dialogue) and write the new scene/framing from the second time segment on
 - **The hold carries no dialogue**: put dialogue after the cut to the new setup
+- **Leave the tail silent (1.5–2s)**: the chain pins the **previous segment's closing audio** into the next segment's head, so if the previous segment ends mid-speech the next head comes back as garbled speech (measured: correlation between seg2's first 1.2s and seg1's last 1.2s was only 0.045 — new, garbled speech). Finish dialogue/narration 1.5–2s before the end and leave the tail to action and ambience
 - About 0.9s of the head is trimmed on delivery, so beats shift earlier; write timecodes against the sampled timing and do not offset by hand (just be aware of the shift)
 
 ## Timeline Rules

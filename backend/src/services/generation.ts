@@ -6,7 +6,8 @@ import { db, getInsertId, schema } from '../db/index.js'
 import { eq, inArray } from 'drizzle-orm'
 import { getActiveConfig, getConfigById } from './ai.js'
 import { now } from '../utils/response.js'
-import { downloadFile, fetchImageAsCompressedDataUrl, generateImageThumb, readImageAsCompressedDataUrl, readImageAsDataUrl, saveBase64Image } from '../utils/storage.js'
+import { downloadFile, fetchImageAsCompressedDataUrl, generateImageThumb, getAbsolutePath, readImageAsCompressedDataUrl, readImageAsDataUrl, saveBase64Image } from '../utils/storage.js'
+import sharp from 'sharp'
 import { extractVideoPoster } from '../utils/video-poster.js'
 import { getImageAdapter, getVideoAdapter } from './adapters/registry'
 import type { AIConfig } from './adapters/types'
@@ -133,43 +134,74 @@ export async function generateImage(params: GenerateImageParams): Promise<number
   return id
 }
 
-/** 机械注入妆造/外观原文（2026-10-07）：
- *  LLM 写提示词时会漏句/调序/改写（同一套规则实测"好一段坏一段"），这里在提交前用数据库里的
- *  角色资产原文整串兜底——提示词正文里那串只当气氛，发给 H3 的一定是这里的原文。
- *  注入块以 `verbatim_lock：` 起头；中转（shim）会把它保留成独立段落、不并入镜头。
- *  budget 内按「先 styling 后 appearance、整行取舍」截断，避免撞上供应商 7000 字符上限。 */
-async function verbatimLockBlock(storyboardId?: number, budget = 6800): Promise<string> {
+/** 该分镜绑定的角色行（按绑定顺序；查库失败返回空数组，不阻断生成） */
+async function storyboardCharacterRows(storyboardId?: number): Promise<any[]> {
   const sid = Number(storyboardId)
-  if (!Number.isFinite(sid) || sid <= 0) return ''
+  if (!Number.isFinite(sid) || sid <= 0) return []
   try {
     const links = await db.select().from(schema.storyboardCharacters)
       .where(eq(schema.storyboardCharacters.storyboardId, sid))
     const ids = [...new Set(links.map((l) => Number(l.characterId)).filter((v) => Number.isFinite(v) && v > 0))]
-    if (!ids.length) return ''
+    if (!ids.length) return []
     const rows = await db.select().from(schema.characters).where(inArray(schema.characters.id, ids))
-    const head =
-      '\nverbatim_lock：以下妆造/外观字符串取自角色资产原文，逐字使用——不得改写、不得省略任何从句、不得调整顺序；' +
-      '脸、发型、发色、服装、配饰、剪裁以此为准（本段正文若与这里不一致，以这里的原文为准）：\n'
-    const styl: string[] = []
-    const app: string[] = []
-    for (const c of rows) {
-      const nm = String(c.name || '').trim()
-      const st = String(c.styling || '').trim()
-      const ap = String(c.appearance || '').trim()
-      if (st) styl.push(`${nm} styling：${st}`)
-      if (ap) app.push(`${nm} appearance：${ap}`)
-    }
-    const picked: string[] = []
-    let used = head.length
-    for (const line of [...styl, ...app]) {
-      if (used + line.length + 1 > budget) break
-      picked.push(line)
-      used += line.length + 1
-    }
-    return picked.length ? head + picked.join('\n') : ''
+    return ids.map((id) => rows.find((r: any) => Number(r.id) === id)).filter((r: any) => !!r)
   } catch {
-    return '' // 查库失败不阻断生成
+    return []
   }
+}
+
+/** 参考板脸格裁切（2026-10-07）：角色板是「一帧四格」（正/左侧/背 无头 + 脸部特写，脸在最右），
+ *  另切出最右 1/4 当独立参考图，把脸部像素信息量放大 4 倍（整块板仍照常发送）。
+ *  视频参考图走原尺寸不压缩（readImageAsDataUrl），所以切出的脸格是原始像素。 */
+async function facePanelDataUrl(imageUrl?: string | null): Promise<string> {
+  const raw = String(imageUrl || '').trim()
+  if (!raw.startsWith('static/') && !raw.startsWith('/static/')) return ''
+  try {
+    const abs = getAbsolutePath(raw.startsWith('/static/') ? raw.slice(1) : raw)
+    const meta = await sharp(abs).metadata()
+    const w = Number(meta.width || 0)
+    const h = Number(meta.height || 0)
+    if (w < 40 || h < 40) return ''
+    const cw = Math.max(16, Math.round(w * 0.25))
+    const buf = await sharp(abs)
+      .extract({ left: w - cw, top: 0, width: cw, height: h })
+      .jpeg({ quality: 92 })
+      .toBuffer()
+    return 'data:image/jpeg;base64,' + buf.toString('base64')
+  } catch {
+    return ''
+  }
+}
+
+/** 拼 verbatim_lock 块：角色 styling/appearance 原文 + 新增脸图的编号说明。
+ *  LLM 写提示词时会漏句/调序/改写（同一套规则实测"好一段坏一段"），这里在提交前用数据库原文兜底。
+ *  块以 `verbatim_lock：` 起头；中转（shim）会把它保留成独立段落、不并入镜头。
+ *  budget 内按「脸图 → styling → appearance、整行取舍」截断，避免撞上供应商 7000 字符上限。 */
+function buildVerbatimLock(rows: any[], faceRefs: { name: string; picNo: number }[], budget: number): string {
+  if (!rows.length) return ''
+  const head =
+    '\nverbatim_lock：以下妆造/外观字符串取自角色资产原文，逐字使用——不得改写、不得省略任何从句、不得调整顺序；' +
+    '脸、发型、发色、服装、配饰、剪裁以此为准（本段正文若与这里不一致，以这里的原文为准）：\n'
+  const styl: string[] = []
+  const app: string[] = []
+  for (const c of rows) {
+    const nm = String(c.name || '').trim()
+    const st = String(c.styling || '').trim()
+    const ap = String(c.appearance || '').trim()
+    if (st) styl.push(`${nm} styling：${st}`)
+    if (ap) app.push(`${nm} appearance：${ap}`)
+  }
+  const face = faceRefs.map(
+    (f) => `face_ref：<Picture ${f.picNo}> 是 ${f.name} 的脸部特写裁切（面部身份以此为准；服装与体型仍以角色板为准）`,
+  )
+  const picked: string[] = []
+  let used = head.length
+  for (const line of [...face, ...styl, ...app]) {
+    if (used + line.length + 1 > budget) break
+    picked.push(line)
+    used += line.length + 1
+  }
+  return picked.length ? head + picked.join('\n') : ''
 }
 
 export async function generateVideo(params: GenerateVideoParams): Promise<number> {
@@ -179,11 +211,22 @@ export async function generateVideo(params: GenerateVideoParams): Promise<number
     : await getActiveConfig('video')
   if (!config) throw new Error('未配置视频模型，请先到「设置」页添加并启用 AI 服务')
 
-  // 妆造/外观机械兜底：仅在 prompt 非空时拼接（空 prompt 保持原样，免得"只有锁"被当成提示词）
+  // 妆造/外观机械兜底 + 脸格加强：仅在 prompt 非空时处理（空 prompt 保持原样）
   const basePrompt = String(params.prompt || '')
-  const lock = basePrompt.trim()
-    ? await verbatimLockBlock(params.storyboardId, Math.max(240, 6800 - basePrompt.length))
-    : ''
+  const refUrls = [...(params.referenceImageUrls || [])]
+  let lock = ''
+  if (basePrompt.trim()) {
+    const rows = await storyboardCharacterRows(params.storyboardId)
+    const faceRefs: { name: string; picNo: number }[] = []
+    for (const c of rows) {
+      if (refUrls.length >= 9) break // 供应商参考图上限 9
+      const dataUrl = await facePanelDataUrl(c.imageUrl)
+      if (!dataUrl || refUrls.includes(dataUrl)) continue
+      refUrls.push(dataUrl)
+      faceRefs.push({ name: String(c.name || '').trim(), picNo: refUrls.length })
+    }
+    lock = buildVerbatimLock(rows, faceRefs, Math.max(240, 6800 - basePrompt.length))
+  }
   const finalPrompt = basePrompt + lock
 
   const id = await createTask('video', config, {
@@ -196,7 +239,7 @@ export async function generateVideo(params: GenerateVideoParams): Promise<number
     imageUrl: params.imageUrl,
     firstFrameUrl: params.firstFrameUrl,
     lastFrameUrl: params.lastFrameUrl,
-    referenceImageUrls: params.referenceImageUrls,
+    referenceImageUrls: refUrls,
     referenceVideoUrls: params.referenceVideoUrls,
     referenceAudioUrls: params.referenceAudioUrls,
     referenceFileUrl: params.referenceFileUrl,
