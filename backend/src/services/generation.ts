@@ -250,6 +250,9 @@ export async function generateVideo(params: GenerateVideoParams): Promise<number
     firstFrameUrl: params.firstFrameUrl,
     lastFrameUrl: params.lastFrameUrl,
     referenceImageUrls: refUrls,
+    // 2026-10-08 必须落库：提交阶段（processTask）从库里读 params 才拿得到资产身份，
+    // 否则 buildRefmodFiles(undefined) → 一个卡都带不上（实测 bug：跑了却没卡）
+    referenceAssetKeys: params.referenceAssetKeys,
     referenceVideoUrls: params.referenceVideoUrls,
     referenceAudioUrls: params.referenceAudioUrls,
     referenceFileUrl: params.referenceFileUrl,
