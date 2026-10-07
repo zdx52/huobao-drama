@@ -33,6 +33,10 @@ soft even studio light, faint shadows, high detail
   - When the prop bears text (titles, seals, signatures, engravings), `description` must fix the surface text verbatim per the story, and the video_prompt must carry it over unchanged
 - **No text**: state explicitly "there is no text on the prop's surface" — **never leave it blank for the model to improvise**
 - **Forbidden**: phrasings such as "some text on the surface" / "Chinese characters on the packaging"
+- **Paper / certificate type props (forms, ID cards, letters, newspapers, book pages, photos) have three more hard rules**:
+  - **Compose the full content**: title (large) + 2–4 body lines + signature (name/date) + seal (the text inside the stamp), **each a separate group, spelled out verbatim**. Example: `the sheet reads "报到证" in large vertical type; below it three body lines reading "林巧", "红星机械厂", "二车间钳工"; signed "三月十七日" at the lower right; a red round seal containing "红星机械厂"` — a sheet of paper is large; a lone title looks bare and invites the model to leave it blank
+  - **The back must be a blank sheet**: state verbatim "the paper is opaque; the back is blank and shows no bleed-through of the front's text, table lines or seal" — omitting it produces the see-through artifact (measured: the registration form's content was visible from the back)
+  - Never write "the paper is thin / translucent / shows through"
 
 ## Generation Rules
 

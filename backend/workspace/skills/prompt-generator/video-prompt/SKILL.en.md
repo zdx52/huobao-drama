@@ -83,6 +83,12 @@ What the body must NOT contain:
 
 **Mandatory final self-check**: scan the body before saving — **none of the characters' appearance/styling source strings may appear** (if one does, it was not slimmed; delete it); then confirm every character appearing has `@name` and the header order matches the reference-image order.
 
+## Paper / certificate props (when they appear in the video)
+
+- **Carry the full surface text**: title + 2–4 body lines + signature (name/date) + seal (text inside the stamp) — each a separate group, **spelled out verbatim**, ≤6 Chinese characters per group (e.g. `the sheet reads "报到证" in large vertical type; three body lines reading "林巧", "红星机械厂", "二车间钳工"; signed "三月十七日" at the lower right`) — a sheet of paper is large; a lone title looks bare, and omitting the content guarantees garbled glyphs
+- **The back must be a blank sheet**: state "the paper is opaque; the back is blank, showing no bleed-through of the front's text, table lines or seal" — especially when the paper is turned, flipped, shown from the back, or held to the light. Otherwise the model shows the front's text through the paper (measured artifact: the registration form's content was visible from the back)
+- Never write "the paper is thin / translucent / shows through"
+
 ## Chain Carry-Over (never hand-written; the runner adds it)
 
 From segment 2 on, the **runner automatically prepends the airlock head** (hold the previous segment's closing framing for ~2s, no dialogue, a breath/weight-shift/eyeline micro-motion, then cut to the new setup). So, in the text:
