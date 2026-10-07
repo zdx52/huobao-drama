@@ -3,7 +3,7 @@
  * 创建(processing) → 适配器构建请求 → 同步完成或异步轮询 → 下载落盘 → 回写业务表
  */
 import { db, getInsertId, schema } from '../db/index.js'
-import { eq } from 'drizzle-orm'
+import { eq, inArray } from 'drizzle-orm'
 import { getActiveConfig, getConfigById } from './ai.js'
 import { now } from '../utils/response.js'
 import { downloadFile, fetchImageAsCompressedDataUrl, generateImageThumb, readImageAsCompressedDataUrl, readImageAsDataUrl, saveBase64Image } from '../utils/storage.js'
@@ -193,8 +193,24 @@ export async function startChain(segments: ChainSegmentPayload[], chainEnabled =
   if (!list.length) throw new Error('续拍链至少需要 1 个有效分镜（prompt 或参考图）')
   // 总闸关=不建 chainId：走官方老路单发（兼容升级，默认开）
   const useChain = chainEnabled !== false
-  const chainId = useChain ? 'ch-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8) : ''
-  const first = list[0]
+  // 2026-10-07 稳定链身份（支持单段重拍）：chainId 按「剧+集」推导，重跑复用同一目录、新存覆盖旧存；
+  // 段号绑定分镜在本集的序号（不再按选中顺序从 1 数），重拍第 k 段时 LOAD=k-1 才能命中上次存的 clip_(k-1)。
+  let chainId = ''
+  let startSeg = 1
+  let plan: (ChainSegmentPayload | null)[] = list
+  let first = list[0]
+  if (useChain) {
+    const ord = await episodeOrdinals(list)
+    const withSeg = list
+      .map((s, i) => ({ s, seg: ord.get(Number(s.storyboard_id)) ?? (i + 1) }))
+      .sort((a, b) => a.seg - b.seg)
+    startSeg = withSeg[0].seg
+    first = withSeg[0].s
+    chainId = 'ch-' + Number(first.drama_id ?? 0) + '-' + (ord.episodeId ?? 0)
+    // plan 按段号就位（前面补空位）：runner 只在 plan[seg] 存在时才续交，单段重拍立即收链
+    plan = new Array(startSeg + withSeg.length - 1).fill(null)
+    withSeg.forEach(({ s, seg }) => { plan[seg - 1] = s })
+  }
   const taskId = await generateVideo({
     storyboardId: first.storyboard_id,
     dramaId: first.drama_id,
@@ -214,12 +230,32 @@ export async function startChain(segments: ChainSegmentPayload[], chainEnabled =
     seed: first.seed,
     configId: first.config_id,
     chainId,
-    chainSegment: useChain ? 1 : undefined,
-    chainSegments: useChain ? list.length : undefined,
-    chainPlan: useChain ? list : undefined,
+    chainSegment: useChain ? startSeg : undefined,
+    chainSegments: useChain ? plan.length : undefined,
+    chainPlan: useChain ? (plan as ChainSegmentPayload[]) : undefined,
   })
-  logTaskStart('VideoTask', 'chain', { chainId: chainId || '(off)', taskId, segments: list.length })
+  logTaskStart('VideoTask', 'chain', { chainId: chainId || '(off)', taskId, segments: list.length, startSeg })
   return { chainId, taskId }
+}
+
+/** 分镜在本集的序号（1 起，按 storyboard_number 排序）+ 该集 episodeId（供稳定 chainId 用） */
+async function episodeOrdinals(list: ChainSegmentPayload[]): Promise<Map<number, number> & { episodeId?: number }> {
+  const out = new Map<number, number>() as Map<number, number> & { episodeId?: number }
+  const ids = list.map((s) => Number(s.storyboard_id)).filter((n) => Number.isFinite(n) && n > 0)
+  if (!ids.length) return out
+  const rows = await db
+    .select({ id: schema.storyboards.id, episodeId: schema.storyboards.episodeId })
+    .from(schema.storyboards)
+    .where(inArray(schema.storyboards.id, ids))
+  out.episodeId = rows.find((r) => r.id === Number(list[0].storyboard_id))?.episodeId ?? rows[0]?.episodeId
+  if (!out.episodeId) return out
+  const all = await db
+    .select({ id: schema.storyboards.id })
+    .from(schema.storyboards)
+    .where(eq(schema.storyboards.episodeId, out.episodeId))
+    .orderBy(schema.storyboards.storyboardNumber, schema.storyboards.id)
+  all.forEach((r, i) => out.set(r.id, i + 1))
+  return out
 }
 
 async function createTask(
@@ -558,8 +594,8 @@ async function handleVideoComplete(record: SysTaskRecord, videoUrl: string, dura
     const p = parseTaskParams(record.params)
     const plan: ChainSegmentPayload[] | null = Array.isArray(p.chainPlan) ? p.chainPlan : null
     const seg = Number(p.chainSegment || 0)
-    if (plan && p.chainId && seg >= 1 && seg < plan.length) {
-      const next = plan[seg] // plan[0] 是第 1 段
+    if (plan && p.chainId && seg >= 1 && seg < plan.length && plan[seg]) {
+      const next = plan[seg] // plan[0] 是第 1 段；空位=该段没被选中，链到此收
       await generateVideo({
         storyboardId: next.storyboard_id,
         dramaId: next.drama_id ?? record.dramaId,

@@ -509,10 +509,10 @@
                   <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/></svg>
                   {{ videoSelectMode && selectedVideoSbIds.length ? t('episode.vid.batchSelected', { n: selectedVideoSbIds.length }) : t('episode.vid.batchVideos') }}
                 </button>
-                <button v-if="videoSelectMode && selectedVideoSbIds.length >= 2" class="btn btn-sm" @click="chainVideos">
-                  {{ t('episode.vid.chainSelected', { n: selectedVideoSbIds.length }) }}
+                <button v-if="videoSelectMode && selectedVideoSbIds.length >= 1" class="btn btn-sm" @click="chainVideos">
+                  {{ selectedVideoSbIds.length === 1 ? t('episode.vid.chainSingle') : t('episode.vid.chainSelected', { n: selectedVideoSbIds.length }) }}
                 </button>
-                <label v-if="videoSelectMode && selectedVideoSbIds.length >= 2" class="chain-toggle" :title="t('episode.vid.chainToggleTip')">
+                <label v-if="videoSelectMode && selectedVideoSbIds.length >= 1" class="chain-toggle" :title="t('episode.vid.chainToggleTip')">
                   <input type="checkbox" v-model="chainMotionContext" />
                   {{ t('episode.vid.chainToggle') }}
                 </label>
@@ -2183,7 +2183,7 @@ async function chainVideos() {
   const ordered = sbs.value
     .filter(s => selectedVideoSbIds.value.includes(s.id))
     .sort((a, b) => ((a.storyboard_number ?? a.storyboardNumber ?? a.id) - (b.storyboard_number ?? b.storyboardNumber ?? b.id)))
-  if (ordered.length < 2) {
+  if (ordered.length < 1) {
     toast.error(t('episode.vid.chainNeedTwo'))
     return
   }
