@@ -133,6 +133,45 @@ export async function generateImage(params: GenerateImageParams): Promise<number
   return id
 }
 
+/** 机械注入妆造/外观原文（2026-10-07）：
+ *  LLM 写提示词时会漏句/调序/改写（同一套规则实测"好一段坏一段"），这里在提交前用数据库里的
+ *  角色资产原文整串兜底——提示词正文里那串只当气氛，发给 H3 的一定是这里的原文。
+ *  注入块以 `verbatim_lock：` 起头；中转（shim）会把它保留成独立段落、不并入镜头。
+ *  budget 内按「先 styling 后 appearance、整行取舍」截断，避免撞上供应商 7000 字符上限。 */
+async function verbatimLockBlock(storyboardId?: number, budget = 6800): Promise<string> {
+  const sid = Number(storyboardId)
+  if (!Number.isFinite(sid) || sid <= 0) return ''
+  try {
+    const links = await db.select().from(schema.storyboardCharacters)
+      .where(eq(schema.storyboardCharacters.storyboardId, sid))
+    const ids = [...new Set(links.map((l) => Number(l.characterId)).filter((v) => Number.isFinite(v) && v > 0))]
+    if (!ids.length) return ''
+    const rows = await db.select().from(schema.characters).where(inArray(schema.characters.id, ids))
+    const head =
+      '\nverbatim_lock：以下妆造/外观字符串取自角色资产原文，逐字使用——不得改写、不得省略任何从句、不得调整顺序；' +
+      '脸、发型、发色、服装、配饰、剪裁以此为准（本段正文若与这里不一致，以这里的原文为准）：\n'
+    const styl: string[] = []
+    const app: string[] = []
+    for (const c of rows) {
+      const nm = String(c.name || '').trim()
+      const st = String(c.styling || '').trim()
+      const ap = String(c.appearance || '').trim()
+      if (st) styl.push(`${nm} styling：${st}`)
+      if (ap) app.push(`${nm} appearance：${ap}`)
+    }
+    const picked: string[] = []
+    let used = head.length
+    for (const line of [...styl, ...app]) {
+      if (used + line.length + 1 > budget) break
+      picked.push(line)
+      used += line.length + 1
+    }
+    return picked.length ? head + picked.join('\n') : ''
+  } catch {
+    return '' // 查库失败不阻断生成
+  }
+}
+
 export async function generateVideo(params: GenerateVideoParams): Promise<number> {
   // 指定配置（集锁定）可能已停用/删除/厂商收敛，失效时回退到当前启用配置
   const config = params.configId
@@ -140,10 +179,17 @@ export async function generateVideo(params: GenerateVideoParams): Promise<number
     : await getActiveConfig('video')
   if (!config) throw new Error('未配置视频模型，请先到「设置」页添加并启用 AI 服务')
 
+  // 妆造/外观机械兜底：仅在 prompt 非空时拼接（空 prompt 保持原样，免得"只有锁"被当成提示词）
+  const basePrompt = String(params.prompt || '')
+  const lock = basePrompt.trim()
+    ? await verbatimLockBlock(params.storyboardId, Math.max(240, 6800 - basePrompt.length))
+    : ''
+  const finalPrompt = basePrompt + lock
+
   const id = await createTask('video', config, {
     storyboardId: params.storyboardId,
     dramaId: params.dramaId,
-    prompt: params.prompt,
+    prompt: finalPrompt,
     model: params.model || config.model,
   }, {
     referenceMode: params.referenceMode || 'reference',
