@@ -756,6 +756,8 @@
       "chainStarted": "续拍链已启动，共 {n} 段，逐段生成",
       "chainFailed": "续拍链停在镜头 #{n}，请处理后重试该段",
       "chainDone": "续拍链全部完成",
+      "chainToggle": "链式续接",
+      "chainToggleTip": "开=Motion Context 接力（声音人物画面三锁）；关=官方老路单发",
       "listMetaFiltered": "筛选结果 · {n}/{total} 个任务",
       "defaultModel": "默认模型",
       "confirmTitle": "批量生成视频",

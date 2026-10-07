@@ -756,6 +756,8 @@
       "chainStarted": "Chain started with {n} segments, generating one by one",
       "chainFailed": "Chain stopped at shot #{n}, fix it and retry that segment",
       "chainDone": "Chain complete",
+      "chainToggle": "Motion Context",
+      "chainToggleTip": "On = Motion Context chaining (audio/cast/scene locked); Off = official single shots",
       "listMetaFiltered": "Filtered · {n}/{total} tasks",
       "defaultModel": "Default model",
       "confirmTitle": "Batch generate videos",

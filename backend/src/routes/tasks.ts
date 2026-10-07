@@ -110,7 +110,9 @@ app.post('/chain', async (c) => {
   try {
     const body = await c.req.json()
     const segments = Array.isArray(body.segments) ? body.segments : []
-    const { chainId, taskId } = await startChain(segments)
+    // 链总闸（前端勾选，默认开）：关=chain_enabled=false，走官方老路单发
+    const chainEnabled = body.chain_enabled !== false
+    const { chainId, taskId } = await startChain(segments, chainEnabled)
     const [record] = await db.select().from(schema.sysTask).where(eq(schema.sysTask.id, taskId))
     logTaskSuccess('TaskAPI', 'chain', { chainId, taskId, segments: segments.length })
     return created(c, { chain_id: chainId, ...record })

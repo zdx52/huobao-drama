@@ -186,12 +186,14 @@ export async function generateVideo(params: GenerateVideoParams): Promise<number
  * 续拍链声明：按序分镜一次建链，交第 1 段；成功后 runner 在 handleVideoComplete 里续交。
  * 单段失败整链停（靠 failTask 自然停），重试=重交失败段（同 chainId/段号）。
  */
-export async function startChain(segments: ChainSegmentPayload[]): Promise<{ chainId: string; taskId: number }> {
+export async function startChain(segments: ChainSegmentPayload[], chainEnabled = true): Promise<{ chainId: string; taskId: number }> {
   const list = (Array.isArray(segments) ? segments : []).filter(
     (s) => s && (String(s.prompt || '').trim() || ((s.reference_image_urls || []).length > 0)),
   )
   if (!list.length) throw new Error('续拍链至少需要 1 个有效分镜（prompt 或参考图）')
-  const chainId = 'ch-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8)
+  // 总闸关=不建 chainId：走官方老路单发（兼容升级，默认开）
+  const useChain = chainEnabled !== false
+  const chainId = useChain ? 'ch-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8) : ''
   const first = list[0]
   const taskId = await generateVideo({
     storyboardId: first.storyboard_id,
@@ -212,11 +214,11 @@ export async function startChain(segments: ChainSegmentPayload[]): Promise<{ cha
     seed: first.seed,
     configId: first.config_id,
     chainId,
-    chainSegment: 1,
-    chainSegments: list.length,
-    chainPlan: list,
+    chainSegment: useChain ? 1 : undefined,
+    chainSegments: useChain ? list.length : undefined,
+    chainPlan: useChain ? list : undefined,
   })
-  logTaskStart('VideoTask', 'chain', { chainId, taskId, segments: list.length })
+  logTaskStart('VideoTask', 'chain', { chainId: chainId || '(off)', taskId, segments: list.length })
   return { chainId, taskId }
 }
 

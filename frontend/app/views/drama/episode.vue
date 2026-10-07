@@ -512,6 +512,10 @@
                 <button v-if="videoSelectMode && selectedVideoSbIds.length >= 2" class="btn btn-sm" @click="chainVideos">
                   {{ t('episode.vid.chainSelected', { n: selectedVideoSbIds.length }) }}
                 </button>
+                <label v-if="videoSelectMode && selectedVideoSbIds.length >= 2" class="chain-toggle" :title="t('episode.vid.chainToggleTip')">
+                  <input type="checkbox" v-model="chainMotionContext" />
+                  {{ t('episode.vid.chainToggle') }}
+                </label>
               </div>
             </div>
             <div v-if="!sbs.length" class="step-empty video-task-empty-state">
@@ -2173,7 +2177,8 @@ function confirmBatchVideos() {
   if (videoSelectMode.value) toggleVideoSelectMode()
 }
 
-// 续拍链：所选分镜按 #号排序一次建链，后端串行逐段（失败即停）；前端按序跟进度
+// 续拍链 Motion Context 总闸：默认开；关=按官方老路单发（不走链模板）
+const chainMotionContext = ref(true)
 async function chainVideos() {
   const ordered = sbs.value
     .filter(s => selectedVideoSbIds.value.includes(s.id))
@@ -2192,9 +2197,10 @@ async function chainVideos() {
     model: bareModelName(videoModel.value) || undefined,
     config_id: ownerConfigId(videoModelOptions.value, videoModel.value),
     reference_image_urls: getShotReferenceImages(sb),
+    chain_enabled: chainMotionContext.value,
   }))
   try {
-    await taskAPI.chain(segments)
+    await taskAPI.chain(segments, chainMotionContext.value)
     toast.success(t('episode.vid.chainStarted', { n: ordered.length }))
     if (videoSelectMode.value) toggleVideoSelectMode()
     await pollChain(ordered)
