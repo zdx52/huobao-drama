@@ -3,6 +3,7 @@ import { and, eq, isNull, like, desc } from 'drizzle-orm'
 import { db, getInsertId, schema } from '../db/index.js'
 import { success, badRequest, notFound, created, now } from '../utils/response.js'
 import { toSnakeCase, toSnakeCaseArray } from '../utils/transform.js'
+import { removeRefmod } from '../services/refmod.js'
 
 const app = new Hono()
 
@@ -130,6 +131,13 @@ app.put('/:id', async (c) => {
 // DELETE /dramas/:id - Soft delete
 app.delete('/:id', async (c) => {
   const id = Number(c.req.param('id'))
+  // 2026-10-08 删项目连带清卡：先取出该剧全部资产 id，再删对应的 RefMod 卡（Mac 主副本）
+  const chars = await db.select({ id: schema.characters.id }).from(schema.characters).where(eq(schema.characters.dramaId, id))
+  const scns = await db.select({ id: schema.scenes.id }).from(schema.scenes).where(eq(schema.scenes.dramaId, id))
+  const prps = await db.select({ id: schema.props.id }).from(schema.props).where(eq(schema.props.dramaId, id))
+  for (const r of chars) removeRefmod('character', r.id)
+  for (const r of scns) removeRefmod('scene', r.id)
+  for (const r of prps) removeRefmod('prop', r.id)
   await db.update(schema.dramas).set({ deletedAt: now() }).where(eq(schema.dramas.id, id))
   return success(c)
 })

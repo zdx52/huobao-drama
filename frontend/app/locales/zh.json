@@ -154,6 +154,17 @@
     }
   },
   "detail": {
+    "refmod": {
+    "make": "生成卡",
+    "doing": "生成中…",
+    "ready": "卡已就绪",
+    "makeTitle": "用该定妆图抽取身份卡（角色/场景/道具各一张）",
+    "readyTitle": "已有卡，点击可重新生成（覆盖同一张）",
+    "needImage": "请先生成或上传定妆图",
+    "done": "卡已生成",
+    "failed": "抽卡失败"
+  },
+    
     "head": {
       "charCount": "{n} 角色",
       "sceneCount": "{n} 场景",

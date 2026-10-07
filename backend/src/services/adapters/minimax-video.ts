@@ -91,6 +91,11 @@ export class MiniMaxVideoAdapter implements VideoProviderAdapter {
       resolution: this.normalizeResolution(record.resolution),
     }
 
+    // RefMod 卡（2026-10-08）：随请求下发；4080 中转落盘到 models/refmods/ 并按参考图同序填槽
+    if (Array.isArray(record.refmodFiles) && record.refmodFiles.length) {
+      body.refmod_files = record.refmodFiles
+    }
+
     // 图生视频（有首帧）ratio 恒为 adaptive，省略；文生视频 ratio 必填
     if (!firstFrame) {
       const ratio = (record.aspectRatio || '').trim()

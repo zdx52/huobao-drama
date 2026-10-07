@@ -7,6 +7,9 @@ import { eq, inArray } from 'drizzle-orm'
 import { getActiveConfig, getConfigById } from './ai.js'
 import { now } from '../utils/response.js'
 import { downloadFile, fetchImageAsCompressedDataUrl, generateImageThumb, getAbsolutePath, readImageAsCompressedDataUrl, readImageAsDataUrl, saveBase64Image } from '../utils/storage.js'
+import { STORAGE_ROOT } from '../utils/paths.js'
+import fs from 'fs'
+import path from 'path'
 import sharp from 'sharp'
 import { extractVideoPoster } from '../utils/video-poster.js'
 import { getImageAdapter, getVideoAdapter } from './adapters/registry'
@@ -56,6 +59,8 @@ interface GenerateVideoParams {
   firstFrameUrl?: string
   lastFrameUrl?: string
   referenceImageUrls?: string[]
+  /** 参考图对应的资产身份（与 referenceImageUrls 同序）：scene-3 / character-15 / prop-7 → 决定用哪张卡 */
+  referenceAssetKeys?: string[]
   referenceVideoUrls?: string[]
   referenceAudioUrls?: string[]
   referenceFileUrl?: string
@@ -83,6 +88,8 @@ export interface ChainSegmentPayload {
   prompt: string
   model?: string
   reference_image_urls?: string[]
+  /** 与 reference_image_urls 同序的资产身份（scene-3 / character-15 / prop-7） */
+  reference_asset_keys?: string[]
   reference_video_urls?: string[]
   reference_audio_urls?: string[]
   image_url?: string
@@ -168,8 +175,8 @@ async function storyboardAudioFields(storyboardId?: number): Promise<{ ambience:
   }
 }
 
-/** 参考板脸格裁切（2026-10-07）：角色板是「一帧四格」（正/左侧/背 无头 + 脸部特写，脸在最右），
- *  另切出最右 1/4 当独立参考图，把脸部像素信息量放大 4 倍（整块板仍照常发送）。
+/** 脸部特写格裁切（2026-10-08 新板）：角色板是「一帧四格」= 脸部特写（最左）/ 正面全身 / 90°左侧面全身 / 背面全身，
+ *  三视图都有头。取**最左 1/4**（脸部特写格）当独立参考图，把脸部像素信息量放大 4 倍（整块板仍照常发送）。
  *  视频参考图走原尺寸不压缩（readImageAsDataUrl），所以切出的脸格是原始像素。 */
 async function facePanelDataUrl(imageUrl?: string | null): Promise<string> {
   const raw = String(imageUrl || '').trim()
@@ -182,7 +189,7 @@ async function facePanelDataUrl(imageUrl?: string | null): Promise<string> {
     if (w < 40 || h < 40) return ''
     const cw = Math.max(16, Math.round(w * 0.25))
     const buf = await sharp(abs)
-      .extract({ left: w - cw, top: 0, width: cw, height: h })
+      .extract({ left: 0, top: 0, width: cw, height: h })
       .jpeg({ quality: 92 })
       .toBuffer()
     return 'data:image/jpeg;base64,' + buf.toString('base64')
@@ -343,6 +350,7 @@ export async function startChain(segments: ChainSegmentPayload[], chainEnabled =
     firstFrameUrl: first.first_frame_url,
     lastFrameUrl: first.last_frame_url,
     referenceImageUrls: first.reference_image_urls,
+    referenceAssetKeys: first.reference_asset_keys,
     referenceVideoUrls: first.reference_video_urls,
     referenceAudioUrls: first.reference_audio_urls,
     generateAudio: first.generate_audio,
@@ -456,6 +464,8 @@ async function processTask(id: number, config: AIConfig) {
       const resolvedFirstFrameUrl = await normalizeVideoReferenceUrl(params.firstFrameUrl)
       const resolvedLastFrameUrl = await normalizeVideoReferenceUrl(params.lastFrameUrl)
       const resolvedReferenceImageUrls = await normalizeVideoReferenceUrls(params.referenceImageUrls)
+      // RefMod 卡：按参考图同序读 Mac 主副本（缺卡 / 数量不符 → 抛错中止，绝不静默降级）
+      const refmodFiles = await buildRefmodFiles(params.referenceAssetKeys, resolvedReferenceImageUrls.length)
       // 参考视频/音频文件较大，不适合 dataURL 内联，需解析为公网可访问 URL
       const resolvedReferenceVideoUrls = resolvePublicMediaUrls(params.referenceVideoUrls, 'video')
       const resolvedReferenceAudioUrls = resolvePublicMediaUrls(params.referenceAudioUrls, 'audio')
@@ -469,6 +479,7 @@ async function processTask(id: number, config: AIConfig) {
         firstFrameUrl: resolvedFirstFrameUrl,
         lastFrameUrl: resolvedLastFrameUrl,
         referenceImageUrls: resolvedReferenceImageUrls.length ? JSON.stringify(resolvedReferenceImageUrls) : null,
+        refmodFiles: refmodFiles.length ? refmodFiles : null,
         referenceVideoUrls: resolvedReferenceVideoUrls.length ? JSON.stringify(resolvedReferenceVideoUrls) : null,
         referenceAudioUrls: resolvedReferenceAudioUrls.length ? JSON.stringify(resolvedReferenceAudioUrls) : null,
         referenceFileUrl: resolvedReferenceFileUrl,
@@ -728,6 +739,7 @@ async function handleVideoComplete(record: SysTaskRecord, videoUrl: string, dura
         firstFrameUrl: next.first_frame_url,
         lastFrameUrl: next.last_frame_url,
         referenceImageUrls: next.reference_image_urls,
+        referenceAssetKeys: next.reference_asset_keys,
         referenceVideoUrls: next.reference_video_urls,
         referenceAudioUrls: next.reference_audio_urls,
         generateAudio: next.generate_audio,
@@ -815,12 +827,66 @@ async function normalizeVideoReferenceUrl(value: string | null | undefined): Pro
   return raw
 }
 
+/**
+ * RefMod 卡（2026-10-08）：按参考图顺序把 Mac 主副本上的卡读成 base64，随请求下发到 4080。
+ *  - 卡名规则：`refmod_<key>_v1.safetensors`（key = `scene-3` / `character-15` / `prop-7`）
+ *  - 存放：`<data>/refmods/`（Mac 主副本；4080 侧只做缓存）
+ *  - **对账**：资产数必须与参考图数一致；任一资产缺卡 → 整单失败（宁可报错，也不出没带卡的漂移片）
+ *  - 未传 keys（老 App / 不带头）时返回空 → 走原路，向后兼容
+ */
+function refmodCardPath(name: string): string {
+  return path.join(STORAGE_ROOT, '..', 'refmods', `${name}.safetensors`)
+}
+
+async function buildRefmodFiles(
+  keys: string[] | null | undefined,
+  refCount: number,
+): Promise<Array<{ name: string; data: string }>> {
+  const list = (Array.isArray(keys) ? keys : []).map((k) => String(k || '').trim()).filter(Boolean)
+  if (!list.length) return []
+  if (refCount && list.length !== refCount) {
+    throw new Error(
+      `卡与参考图数量不一致：参考图 ${refCount} 张、资产 ${list.length} 个，已中止本次生成。` +
+      `请重新绑定本段素材后重试。`,
+    )
+  }
+  const out: Array<{ name: string; data: string }> = []
+  const missing: string[] = []
+  for (const key of list) {
+    const name = `refmod_${key.replace(/[^A-Za-z0-9_-]/g, '_')}_v1`
+    try {
+      const buf = await fs.promises.readFile(refmodCardPath(name))
+      out.push({ name, data: buf.toString('base64') })
+    } catch {
+      missing.push(`${key}（卡名 ${name}）`)
+    }
+  }
+  if (missing.length) {
+    throw new Error(
+      `以下素材还没有生成卡，已中止本次生成：${missing.join('、')}。` +
+      `请先到对应资产上点「生成卡」，或在设置里关闭"必须带卡"。`,
+    )
+  }
+  return out
+}
+
 async function normalizeVideoReferenceUrls(refs: string[] | null | undefined): Promise<string[]> {
   if (!Array.isArray(refs) || !refs.length) return []
-  const normalized = await Promise.all(
-    Array.from(new Set(refs.map((item) => String(item || '').trim()).filter(Boolean))).map((item) => normalizeVideoReferenceUrl(item)),
-  )
-  return normalized.filter((item): item is string => !!item)
+  const unique = Array.from(new Set(refs.map((item) => String(item || '').trim()).filter(Boolean)))
+  const normalized: string[] = []
+  // 2026-10-08 防"静默降级"：任何一张参考图读不到 → **整单失败**，绝不静默丢图
+  // （丢一张会让后面的图整体前移一位，身份/画面就绑错了，比报错严重得多）
+  for (let i = 0; i < unique.length; i++) {
+    const one = await normalizeVideoReferenceUrl(unique[i])
+    if (!one) {
+      throw new Error(
+        `参考图读取失败：第 ${i + 1} 张（共 ${unique.length} 张）无法读取，已中止本次生成。` +
+        `请检查该图片文件是否存在/可访问后重试。`,
+      )
+    }
+    normalized.push(one)
+  }
+  return normalized
 }
 
 /**

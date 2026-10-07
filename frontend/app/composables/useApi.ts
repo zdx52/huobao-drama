@@ -89,6 +89,14 @@ export const propAPI = {
   generateImage: (id: number, episodeId: number, model?: string, configId?: number, textModel?: string, textConfigId?: number) => api.post(`/props/${id}/generate-image`, { episode_id: episodeId, model: model || undefined, config_id: configId || undefined, text_model: textModel || undefined, text_config_id: textConfigId || undefined }),
 }
 
+// RefMod 卡（2026-10-08）：角色/场景/道具的"身份卡"——抽卡 + 状态查询
+export const refmodAPI = {
+  status: (kind: string, id: number) => api.get(`/refmod/status?kind=${encodeURIComponent(kind)}&id=${id}`),
+  statuses: (keys: string[]) => api.get(`/refmod/statuses?keys=${encodeURIComponent(keys.join(','))}`),
+  extract: (kind: string, id: number) => api.post('/refmod/extract', { kind, id }),
+  del: (kind: string, id: number) => api.del(`/refmod?kind=${encodeURIComponent(kind)}&id=${id}`),
+}
+
 // 统一生成任务（图片/视频）：POST 带 type 字段，列表按 type 过滤
 export const taskAPI = {
   generate: (d: any) => api.post('/tasks', d),

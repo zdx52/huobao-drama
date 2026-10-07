@@ -2197,6 +2197,7 @@ async function chainVideos() {
     model: bareModelName(videoModel.value) || undefined,
     config_id: ownerConfigId(videoModelOptions.value, videoModel.value),
     reference_image_urls: getShotReferenceImages(sb),
+    reference_asset_keys: getShotReferenceAssetKeys(sb),
     chain_enabled: chainMotionContext.value,
   }))
   try {
@@ -3121,6 +3122,27 @@ function getShotReferenceImages(sb) {
   return refs
 }
 
+// 2026-10-08 与 getShotReferenceImages 同序的"资产身份"（scene-3 / character-15 / prop-7）：
+// 后端按这个顺序去 Mac 主副本找对应的 RefMod 卡，卡槽位与参考图一一对应（<Picture i> ↔ mod_i）
+function getShotReferenceAssetKeys(sb) {
+  const refs = []
+  const keys = []
+  const pushRef = (value, key) => {
+    if (!value || refs.includes(value) || refs.length >= refImageLimit.value) return
+    refs.push(value)
+    keys.push(key)
+  }
+  const scene = getStoryboardScene(sb)
+  if (scene) pushRef(scene.image_url || scene.imageUrl, `scene-${scene.id}`)
+  for (const char of getStoryboardCharacters(sb)) {
+    if (char) pushRef(char.image_url || char.imageUrl, `character-${char.id}`)
+  }
+  for (const prop of getStoryboardProps(sb)) {
+    if (prop) pushRef(prop.image_url || prop.imageUrl, `prop-${prop.id}`)
+  }
+  return keys
+}
+
 // 右侧参考素材面板：本集全部可绑定素材（场景单选、角色/道具多选），bound 标记是否已绑定
 // kind 为英文 code（逻辑值）；typeLabel 为显示名（渲染时求值）
 function shotBindableAssets(sb) {
@@ -3335,6 +3357,7 @@ async function genVid(sb, opts = {}) {
     model: bareModelName(videoModel.value) || undefined,
     config_id: ownerConfigId(videoModelOptions.value, videoModel.value),
     reference_image_urls: referenceImages,
+    reference_asset_keys: getShotReferenceAssetKeys(sb),
   }
   if (!params.prompt && !referenceImages.length) {
     toast.error(t('episode.vid.needRefOrPrompt'))

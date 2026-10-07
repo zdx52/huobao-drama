@@ -114,6 +114,8 @@ export interface VideoGenerationRecord {
   chainId?: string | null
   chainSegment?: number | null
   chainSegments?: number | null
+  /** RefMod 卡（2026-10-08）：随请求下发的身份/场景/道具卡，4080 侧落盘后按序填槽 */
+  refmodFiles?: Array<{ name: string; data: string }> | null
   // ... 其他字段
 }
 

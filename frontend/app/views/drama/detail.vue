@@ -251,6 +251,16 @@
                         <svg v-else width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
                         {{ t('episode.asset.upload') }}
                       </button>
+                      <button
+                        class="btn btn-sm"
+                        type="button"
+                        :disabled="refmodBusyAny(m)"
+                        :title="refmodReady(m) ? t('detail.refmod.readyTitle') : t('detail.refmod.makeTitle')"
+                        @click.stop="makeRefmodCard(m)"
+                      >
+                        <span v-if="refmodBusyOne(m)" class="ring-spinner sm"></span>
+                        {{ refmodReady(m) ? '✓ ' + t('detail.refmod.ready') : (refmodBusyOne(m) ? t('detail.refmod.doing') : t('detail.refmod.make')) }}
+                      </button>
                     </div>
                   </div>
                   <div class="asset-final-prompt" :title="m.finalPrompt || ''">
@@ -311,6 +321,16 @@
                   <button class="btn btn-sm" type="button" :disabled="isPending(m)" @click.stop="generateMaterial(m)">
                     <span v-if="isPending(m)" class="ring-spinner sm"></span>
                     {{ matHasImage(m) ? t('episode.asset.regen') : (isPending(m) ? t('episode.asset.generating') : t('episode.asset.generate')) }}
+                  </button>
+                  <button
+                    class="btn btn-sm"
+                    type="button"
+                    :disabled="refmodBusyAny(m)"
+                    :title="refmodReady(m) ? t('detail.refmod.readyTitle') : t('detail.refmod.makeTitle')"
+                    @click.stop="makeRefmodCard(m)"
+                  >
+                    <span v-if="refmodBusyOne(m)" class="ring-spinner sm"></span>
+                    {{ refmodReady(m) ? '✓ ' + t('detail.refmod.ready') : (refmodBusyOne(m) ? t('detail.refmod.doing') : t('detail.refmod.make')) }}
                   </button>
                 </div>
               </div>
@@ -565,7 +585,7 @@
 import { toast } from 'vue-sonner'
 import { toastError } from '~/composables/useToast'
 import { useI18n } from 'vue-i18n'
-import { dramaAPI, episodeAPI, characterAPI, sceneAPI, propAPI, uploadAPI } from '~/composables/useApi'
+import { dramaAPI, episodeAPI, characterAPI, sceneAPI, propAPI, uploadAPI, refmodAPI } from '~/composables/useApi'
 import BaseSelect from '~/components/BaseSelect.vue'
 
 const { t, locale } = useI18n()
@@ -747,6 +767,38 @@ const assetGroups = computed(() => {
 })
 
 function pendingKey(m) { return `${m.kindKey}:${m.id}` }
+// ── RefMod 卡（2026-10-08）：给角色/场景/道具各抽一张身份卡，生成视频时随参考图同序下发 ──
+const refmodCards = ref({})
+const refmodBusy = ref({})
+function refmodKey(m) { return `${m.kindKey}-${m.id}` }
+function refmodReady(m) { return !!refmodCards.value[refmodKey(m)]?.ready }
+function refmodBusyOne(m) { return !!refmodBusy.value[refmodKey(m)] }
+function refmodBusyAny(m) { return refmodBusyOne(m) || isPending(m) }
+async function loadRefmodStatus() {
+  const keys = materials.value.map((m) => refmodKey(m))
+  if (!keys.length) return
+  try {
+    refmodCards.value = (await refmodAPI.statuses(keys)) || {}
+  } catch { /* 状态查询失败不打扰用户 */ }
+}
+async function makeRefmodCard(m) {
+  const key = refmodKey(m)
+  if (refmodBusy.value[key]) return
+  if (!matHasImage(m)) { toast.error(t('detail.refmod.needImage')); return }
+  refmodBusy.value = { ...refmodBusy.value, [key]: true }
+  try {
+    await refmodAPI.extract(m.kindKey, m.id)
+    toast.success(t('detail.refmod.done'))
+    await loadRefmodStatus()
+  } catch (e) {
+    toast.error(e?.message || t('detail.refmod.failed'))
+  } finally {
+    const next = { ...refmodBusy.value }
+    delete next[key]
+    refmodBusy.value = next
+  }
+}
+
 function isPending(m) { return pendingMaterials.value.has(pendingKey(m)) }
 
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)) }
@@ -914,7 +966,7 @@ async function saveEdit() {
   }
 }
 
-onMounted(load)
+onMounted(async () => { await load(); await loadRefmodStatus() })
 </script>
 
 <style scoped>

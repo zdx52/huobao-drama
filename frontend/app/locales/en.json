@@ -154,6 +154,17 @@
     }
   },
   "detail": {
+    "refmod": {
+    "make": "ID card",
+    "doing": "Making…",
+    "ready": "Card ready",
+    "makeTitle": "Extract an identity card from this shot (one per asset)",
+    "readyTitle": "Card exists — click to regenerate (overwrites)",
+    "needImage": "Generate or upload the shot first",
+    "done": "Card created",
+    "failed": "Card extraction failed"
+  },
+    
     "head": {
       "charCount": "{n} characters",
       "sceneCount": "{n} scenes",

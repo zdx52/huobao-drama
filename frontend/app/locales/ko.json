@@ -154,6 +154,17 @@
     }
   },
   "detail": {
+    "refmod": {
+    "make": "카드 생성",
+    "doing": "생성 중…",
+    "ready": "카드 완료",
+    "makeTitle": "이 이미지에서 ID 카드를 추출합니다 (자산당 1장)",
+    "readyTitle": "카드 있음 · 클릭하면 재생성(덮어쓰기)",
+    "needImage": "먼저 이미지를 생성하거나 업로드하세요",
+    "done": "카드를 만들었습니다",
+    "failed": "카드 생성 실패"
+  },
+    
     "head": {
       "charCount": "캐릭터 {n}",
       "sceneCount": "장면 {n}",
