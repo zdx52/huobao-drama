@@ -18,9 +18,9 @@ asarUnpack:
 extraResources:
   - { from: resources/frontend, to: frontend }
   - { from: resources/workspace-template, to: workspace-template }
-  # ${os} 宏：darwin → bin-darwin/（无扩展名二进制），win32 → bin-win32/（.exe），
-  # 各自只带本平台的 ffmpeg/ffprobe
-  - { from: "resources/bin-${os}", to: bin }
+  # ${os}-${arch} 宏：mac→arm64/x64 各带一份原生 ffmpeg/ffprobe（避免 arm64 包里混进 x86_64 的 ffprobe，
+  # 2026-10-08 修：ffprobe-static 只有 darwin-x64，曾导致 Apple Silicon 上要装 Rosetta）
+  - { from: "resources/bin-${os}-${arch}", to: bin }
 npmRebuild: true
 # win 交叉打包修复：宿主机（mac）下载的原生预编译是 Mach-O，afterPack 换入官方 win32 .node
 afterPack: scripts/after-pack.mjs
