@@ -2,7 +2,7 @@ import { Hono } from 'hono'
 import { eq } from 'drizzle-orm'
 import { db, schema } from '../db/index.js'
 import { success, created, badRequest } from '../utils/response.js'
-import { generateImage, generateVideo } from '../services/generation.js'
+import { generateImage, generateVideo, startChain } from '../services/generation.js'
 import { getActiveConfig, getConfigById } from '../services/ai.js'
 import { getDramaStylePrompt } from '../services/style-preset.js'
 import { logTaskError, logTaskPayload, logTaskStart, logTaskSuccess } from '../utils/task-logger.js'
@@ -105,6 +105,21 @@ function validateVideoRequest(body: any, provider?: string): string | null {
   return null
 }
 
+// POST /tasks/chain — 续拍链声明：按序分镜一次建链，后端串行逐段（失败即停）
+app.post('/chain', async (c) => {
+  try {
+    const body = await c.req.json()
+    const segments = Array.isArray(body.segments) ? body.segments : []
+    const { chainId, taskId } = await startChain(segments)
+    const [record] = await db.select().from(schema.sysTask).where(eq(schema.sysTask.id, taskId))
+    logTaskSuccess('TaskAPI', 'chain', { chainId, taskId, segments: segments.length })
+    return created(c, { chain_id: chainId, ...record })
+  } catch (err: any) {
+    logTaskError('TaskAPI', 'chain', { error: err.message })
+    return badRequest(c, err.message)
+  }
+})
+
 // POST /tasks — 发起生成任务（body.type: image | video）
 app.post('/', async (c) => {
   const body = await c.req.json()
@@ -193,6 +208,9 @@ app.post('/', async (c) => {
         seed: videoBody!.seed,
         promptExtend: videoBody!.prompt_extend,
         watermark: videoBody!.watermark,
+        chainId: (videoBody as any)!.chain_id,
+        chainSegment: (videoBody as any)!.chain_segment,
+        chainSegments: (videoBody as any)!.chain_segments,
         configId,
       })
 

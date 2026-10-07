@@ -1,0 +1,35 @@
+name: build-mac
+
+on:
+  push:
+    branches: [chain]
+  workflow_dispatch: {}
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Frontend
+        run: |
+          cd frontend
+          npm ci
+          npm run generate
+
+      - name: Desktop dist (unsigned)
+        run: |
+          cd desktop
+          npm ci
+          npm run dist
+
+      - name: Upload dmg
+        uses: actions/upload-artifact@v4
+        with:
+          name: HuobaoDrama-mac
+          path: desktop/release/*.dmg
+          if-no-files-found: error

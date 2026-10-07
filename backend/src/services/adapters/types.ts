@@ -110,6 +110,10 @@ export interface VideoGenerationRecord {
   seed?: number | null
   promptExtend?: number | boolean | null
   watermark?: number | boolean | null
+  /** 续拍链（可选）：同场景多镜头链式生成时透传给供应商 */
+  chainId?: string | null
+  chainSegment?: number | null
+  chainSegments?: number | null
   // ... 其他字段
 }
 

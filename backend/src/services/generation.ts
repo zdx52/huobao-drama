@@ -36,6 +36,12 @@ interface GenerateImageParams {
   configId?: number
 }
 
+/** 续拍 airlock 头（runner 在第 2 段起自动前置）：hold 上段结尾 + 首句重复尾词 */
+const AIRLOCK_HEAD =
+  '[续拍] Hold the exact closing framing of the previous segment for about 2 seconds, ' +
+  'no camera move, performers keep a breath/weight-shift/eyeline micro-motion, then cut to the new setup. ' +
+  'Repeat the previous segment\u2019s last word/phrase as the first line (~0.9s of the head is trimmed). '
+
 interface GenerateVideoParams {
   storyboardId?: number
   dramaId?: number
@@ -58,6 +64,32 @@ interface GenerateVideoParams {
   promptExtend?: boolean
   watermark?: boolean
   configId?: number
+  /** 续拍链（可选）：同场景多镜头链式生成时透传给供应商 */
+  chainId?: string
+  chainSegment?: number
+  chainSegments?: number
+  /** 续拍链计划（仅首段携带）：按序的分镜 payload 数组，runner 逐段取用 */
+  chainPlan?: ChainSegmentPayload[]
+}
+
+/** 链内单段 payload（与 tasks 入口字段对齐的子集） */
+export interface ChainSegmentPayload {
+  storyboard_id?: number
+  drama_id?: number
+  prompt: string
+  model?: string
+  reference_image_urls?: string[]
+  reference_video_urls?: string[]
+  reference_audio_urls?: string[]
+  image_url?: string
+  first_frame_url?: string
+  last_frame_url?: string
+  generate_audio?: boolean
+  duration?: number
+  aspect_ratio?: string
+  resolution?: string
+  seed?: number
+  config_id?: number
 }
 
 export async function generateImage(params: GenerateImageParams): Promise<number> {
@@ -128,6 +160,10 @@ export async function generateVideo(params: GenerateVideoParams): Promise<number
     seed: params.seed,
     promptExtend: params.promptExtend,
     watermark: params.watermark,
+    chainId: params.chainId,
+    chainSegment: params.chainSegment,
+    chainSegments: params.chainSegments,
+    chainPlan: params.chainPlan,
   })
 
   logTaskStart('VideoTask', 'enqueue', {
@@ -144,6 +180,44 @@ export async function generateVideo(params: GenerateVideoParams): Promise<number
     params,
   })
   return id
+}
+
+/**
+ * 续拍链声明：按序分镜一次建链，交第 1 段；成功后 runner 在 handleVideoComplete 里续交。
+ * 单段失败整链停（靠 failTask 自然停），重试=重交失败段（同 chainId/段号）。
+ */
+export async function startChain(segments: ChainSegmentPayload[]): Promise<{ chainId: string; taskId: number }> {
+  const list = (Array.isArray(segments) ? segments : []).filter(
+    (s) => s && (String(s.prompt || '').trim() || ((s.reference_image_urls || []).length > 0)),
+  )
+  if (!list.length) throw new Error('续拍链至少需要 1 个有效分镜（prompt 或参考图）')
+  const chainId = 'ch-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8)
+  const first = list[0]
+  const taskId = await generateVideo({
+    storyboardId: first.storyboard_id,
+    dramaId: first.drama_id,
+    prompt: first.prompt,
+    model: first.model,
+    referenceMode: 'reference',
+    imageUrl: first.image_url,
+    firstFrameUrl: first.first_frame_url,
+    lastFrameUrl: first.last_frame_url,
+    referenceImageUrls: first.reference_image_urls,
+    referenceVideoUrls: first.reference_video_urls,
+    referenceAudioUrls: first.reference_audio_urls,
+    generateAudio: first.generate_audio,
+    duration: first.duration,
+    aspectRatio: first.aspect_ratio,
+    resolution: first.resolution,
+    seed: first.seed,
+    configId: first.config_id,
+    chainId,
+    chainSegment: 1,
+    chainSegments: list.length,
+    chainPlan: list,
+  })
+  logTaskStart('VideoTask', 'chain', { chainId, taskId, segments: list.length })
+  return { chainId, taskId }
 }
 
 async function createTask(
@@ -246,6 +320,9 @@ async function processTask(id: number, config: AIConfig) {
         seed: params.seed,
         promptExtend: params.promptExtend,
         watermark: params.watermark,
+        chainId: params.chainId,
+        chainSegment: params.chainSegment,
+        chainSegments: params.chainSegments,
       }))
     }
 
@@ -472,6 +549,45 @@ async function handleVideoComplete(record: SysTaskRecord, videoUrl: string, dura
     await db.update(schema.storyboards)
       .set({ videoUrl: localPath, duration: duration || undefined, updatedAt: now() })
       .where(eq(schema.storyboards.id, record.storyboardId))
+  }
+
+  // 续拍链 runner：本段成功后自动交下一段（串行；失败走 failTask 自然停链）
+  try {
+    const p = parseTaskParams(record.params)
+    const plan: ChainSegmentPayload[] | null = Array.isArray(p.chainPlan) ? p.chainPlan : null
+    const seg = Number(p.chainSegment || 0)
+    if (plan && p.chainId && seg >= 1 && seg < plan.length) {
+      const next = plan[seg] // plan[0] 是第 1 段
+      await generateVideo({
+        storyboardId: next.storyboard_id,
+        dramaId: next.drama_id ?? record.dramaId,
+        prompt: AIRLOCK_HEAD + String(next.prompt || ''),
+        model: next.model,
+        referenceMode: 'reference',
+        imageUrl: next.image_url,
+        firstFrameUrl: next.first_frame_url,
+        lastFrameUrl: next.last_frame_url,
+        referenceImageUrls: next.reference_image_urls,
+        referenceVideoUrls: next.reference_video_urls,
+        referenceAudioUrls: next.reference_audio_urls,
+        generateAudio: next.generate_audio,
+        duration: next.duration,
+        aspectRatio: next.aspect_ratio,
+        resolution: next.resolution,
+        seed: next.seed,
+        configId: next.config_id,
+        chainId: String(p.chainId),
+        chainSegment: seg + 1,
+        chainSegments: plan.length,
+        chainPlan: plan,
+      })
+      logTaskSuccess('VideoTask', 'chain-next', { chainId: p.chainId, fromSeg: seg, toSeg: seg + 1 })
+    } else if (plan && p.chainId && seg >= plan.length && plan.length > 0) {
+      logTaskSuccess('VideoTask', 'chain-done', { chainId: p.chainId, segments: plan.length })
+    }
+  } catch (err: any) {
+    // runner 自身异常：下一段没建，链停在当前段，前端按失败段重试即可
+    logTaskError('VideoTask', 'chain-runner', { id: record.id, error: err?.message })
   }
 }
 

@@ -97,6 +97,13 @@ export class MiniMaxVideoAdapter implements VideoProviderAdapter {
       body.ratio = VALID_RATIOS.has(ratio) ? ratio : '16:9'
     }
 
+    // 续拍链（可选）：三字段齐了才发，中转按 chain 走链模板；缺任何一个即老路单段
+    if (record.chainId && Number.isFinite(Number(record.chainSegment))) {
+      body.chain = String(record.chainId)
+      body.segment = Number(record.chainSegment)
+      if (Number.isFinite(Number(record.chainSegments))) body.segments = Number(record.chainSegments)
+    }
+
     return {
       url: joinProviderUrl(config.baseUrl, '/v2', '/video_generation'),
       method: 'POST',

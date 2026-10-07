@@ -509,6 +509,9 @@
                   <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/></svg>
                   {{ videoSelectMode && selectedVideoSbIds.length ? t('episode.vid.batchSelected', { n: selectedVideoSbIds.length }) : t('episode.vid.batchVideos') }}
                 </button>
+                <button v-if="videoSelectMode && selectedVideoSbIds.length >= 2" class="btn btn-sm" @click="chainVideos">
+                  {{ t('episode.vid.chainSelected', { n: selectedVideoSbIds.length }) }}
+                </button>
               </div>
             </div>
             <div v-if="!sbs.length" class="step-empty video-task-empty-state">
@@ -2168,6 +2171,68 @@ function confirmBatchVideos() {
     return done
   }), 80, 4000)
   if (videoSelectMode.value) toggleVideoSelectMode()
+}
+
+// 续拍链：所选分镜按 #号排序一次建链，后端串行逐段（失败即停）；前端按序跟进度
+async function chainVideos() {
+  const ordered = sbs.value
+    .filter(s => selectedVideoSbIds.value.includes(s.id))
+    .sort((a, b) => ((a.storyboard_number ?? a.storyboardNumber ?? a.id) - (b.storyboard_number ?? b.storyboardNumber ?? b.id)))
+  if (ordered.length < 2) {
+    toast.error(t('episode.vid.chainNeedTwo'))
+    return
+  }
+  const segments = ordered.map(sb => ({
+    storyboard_id: sb.id,
+    drama_id: dramaId,
+    prompt: resolveVideoPromptRefs(sb),
+    duration: Number(sb.duration || 10),
+    aspect_ratio: dramaAspectRatio.value,
+    generate_audio: true,
+    model: bareModelName(videoModel.value) || undefined,
+    config_id: ownerConfigId(videoModelOptions.value, videoModel.value),
+    reference_image_urls: getShotReferenceImages(sb),
+  }))
+  try {
+    await taskAPI.chain(segments)
+    toast.success(t('episode.vid.chainStarted', { n: ordered.length }))
+    if (videoSelectMode.value) toggleVideoSelectMode()
+    await pollChain(ordered)
+  } catch (e) {
+    toastError(e, { fallback: 'episode.vid.genFailed' })
+  }
+}
+
+async function pollChain(ordered) {
+  for (const sb of ordered) {
+    if (!pendingVideoIds.value.includes(sb.id)) pendingVideoIds.value.push(sb.id)
+    let done = false
+    for (let i = 0; i < 270; i++) { // 每段最多约 18 分钟
+      await sleep(4000)
+      await refresh()
+      const mine = genTasks.value
+        .filter(t => t.type === 'video' && t.storyboard_id === sb.id)
+        .sort((a, b) => b.id - a.id)[0]
+      if (mine?.status === 'completed') { done = true; break }
+      if (mine?.status === 'failed') {
+        pendingVideoIds.value = pendingVideoIds.value.filter(id => id !== sb.id)
+        failedVideoMessages.value = {
+          ...failedVideoMessages.value,
+          [sb.id]: mine?.error_msg || t('episode.vid.genFailed'),
+        }
+        toast.error(t('episode.vid.chainFailed', { n: sb.storyboard_number ?? sb.storyboardNumber ?? sb.id }))
+        return
+      }
+    }
+    pendingVideoIds.value = pendingVideoIds.value.filter(id => id !== sb.id)
+    if (!done) {
+      failedVideoMessages.value = { ...failedVideoMessages.value, [sb.id]: t('episode.vid.genTimeout') }
+      toast.error(t('episode.vid.genTimeout'))
+      return
+    }
+    delete failedVideoMessages.value[sb.id]
+  }
+  toast.success(t('episode.vid.chainDone'))
 }
 
 // 配置变化后校验持久化的模型是否仍存在（配置被删/模型被移除时回退默认，避免把失效模型传给后端）
