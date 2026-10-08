@@ -963,6 +963,9 @@ async function doVoiceGenerate() {
   }
 }
 
+// 资产生图/生卡"进行中"判定（f66085f 误删，导致剧集页渲染时 isPending is not a function → 整页黑屏）
+function isPending(m) { return pendingMaterials.value.has(pendingKey(m)) }
+
 function voiceDescOf(m) { return voiceCards.value[String(m?.id)]?.voiceDesc || '' }
 
 // 「AI 重新生成」音色描述（force）：走 POST /voice/prompt，结果写回编辑框（保存后才落盘生效）
