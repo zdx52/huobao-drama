@@ -920,19 +920,21 @@ async function openVoiceDialog(m) {
   voiceDialog.value = {
     open: true, id: m.id, name: m.name || '', sex,
     base: card.base || opts[0]?.id || '',
-    desc: card.desc || '',            // 已有卡 → 用上次实际用的描述
+    // 优先级：下面从磁盘取的当前值 > 角色卡上的当前描述 > 上次实际生成用的那份
+    desc: card.voiceDesc || card.desc || '',
     busy: false, audioUrl: card.wav ? voiceCardAudioUrl(m.id) : '', msg: '', hasCard: !!card.ready, aiHint: false,
   }
-  // 还没描述 → 取「生成角色提示词」时顺带产出的那份（AI 按角色自动填，可改）
-  if (!voiceDialog.value.desc) {
-    try {
-      const r = await voiceAPI.prompt(m.id)
-      if (r?.desc && voiceDialog.value.open && voiceDialog.value.id === m.id) {
-        voiceDialog.value.desc = r.desc
-        voiceDialog.value.aiHint = true
-      }
-    } catch { /* 没有就没填，手输也行 */ }
-  }
+  // 音色描述以**磁盘当前版本**为准：不管是在编辑框里点过「AI 生成」还是手改保存，
+  // 只要落过盘就必须立刻联动进这个面板（以前只在没描述时才取，导致已有卡时一直显示旧描述）
+  try {
+    const r = await voiceAPI.prompt(m.id)
+    const pdf = String(r?.desc || '')
+    if (pdf && voiceDialog.value.open && voiceDialog.value.id === m.id) {
+      const changed = pdf !== (card.desc || '')
+      voiceDialog.value.desc = pdf
+      voiceDialog.value.aiHint = r?.source === 'ai' && (!card.desc || changed)
+    }
+  } catch { /* 取不到就沿用已在框里的（角色卡当前值 / 上次生成用的），手输也行 */ }
 }
 function closeVoiceDialog() { voiceDialog.value.open = false }
 function setVoiceSex(sex) {
@@ -1171,8 +1173,10 @@ async function saveEdit() {
     else if (target.kindKey === 'scene') await sceneAPI.update(target.id, { location: editDraft.location, time: editDraft.time, prompt: editDraft.prompt, lighting: editDraft.lighting, finalPrompt: fp })
     else await propAPI.update(target.id, { name: editDraft.name, type: editDraft.type, description: editDraft.description, finalPrompt: fp })
     toast.success(t('common.saved'))
-    closeEdit()
-    load()
+    // 用户要求：保存后**不关闭**弹层，方便接着改；只把目标换成刷新后的最新数据
+    await load()
+    const fresh = materials.value.find(m => m.kindKey === target.kindKey && m.id === target.id)
+    if (fresh) editTarget.value = fresh
   } catch (e) {
     toastError(e)
   } finally {

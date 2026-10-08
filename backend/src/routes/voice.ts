@@ -26,7 +26,7 @@ import { logTaskError } from '../utils/task-logger.js'
 // ⚠️ 音色描述（ensureVoiceDesc/readVoicePrompt/saveVoicePrompt）住在 services/voice-prompt.js，
 //    不是 services/voice.js。漏了这行 = 运行时 ReferenceError（AI 生成按钮报「音色描述生成失败」），
 //    而 esbuild 打包**不会**报错（未声明的标识符按全局处理）→ CI 绿、点按钮才炸。
-import { ensureVoiceDesc, readVoicePrompt, saveVoicePrompt } from '../services/voice-prompt.js'
+import { ensureVoiceDesc, readVoicePromptMeta, saveVoicePrompt } from '../services/voice-prompt.js'
 import fs from 'fs'
 
 const app = new Hono()
@@ -34,10 +34,11 @@ const app = new Hono()
 app.get('/bases', (c) => success(c, listVoiceBases()))
 
 // 角色提示词生成时顺带产出的音色描述（声音面板自动带出；可手改）
+// 返回整份元信息：desc + source(ai/user) + updated_at —— 面板据此判断「这条是不是新 AI 生成的」
 app.get('/prompt', (c) => {
   const id = Number(c.req.query('id') || 0)
   if (!id) return badRequest(c, 'id 必填')
-  return success(c, { desc: readVoicePrompt(id) })
+  return success(c, readVoicePromptMeta(id))
 })
 
 // 用户手改音色描述（落文件，source=user）——只改描述，不动已有的声音卡
