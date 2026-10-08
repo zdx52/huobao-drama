@@ -173,15 +173,29 @@
 
     <!-- 素材库 -->
     <div v-else-if="activeTab === 'assets'" class="assets-wrap">
-      <div class="seg asset-filter">
+      <div class="assets-head">
+        <div class="seg asset-filter">
+          <button
+            v-for="t in assetTabs"
+            :key="t.value"
+            type="button"
+            class="seg-item"
+            :class="{ on: assetTab === t.value }"
+            @click="assetTab = t.value"
+          >{{ t.label }}</button>
+        </div>
+        <!-- 总刷新：重拉剧集（资产图/状态）+ 身份卡状态 + 声音卡状态 + 底样本库 -->
         <button
-          v-for="t in assetTabs"
-          :key="t.value"
+          class="btn btn-sm assets-refresh"
           type="button"
-          class="seg-item"
-          :class="{ on: assetTab === t.value }"
-          @click="assetTab = t.value"
-        >{{ t.label }}</button>
+          :disabled="assetsRefreshing"
+          :title="t('detail.assets.refreshTitle')"
+          @click="refreshAssets()"
+        >
+          <span v-if="assetsRefreshing" class="ring-spinner sm"></span>
+          <svg v-else width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+          {{ t('detail.assets.refresh') }}
+        </button>
       </div>
 
       <!-- 全部素材为空 -->
@@ -469,9 +483,9 @@
                     <span>{{ t('detail.voice.field') }}</span>
                     <textarea v-model="editDraft.voiceDesc" class="textarea mat-detail-textarea" rows="3" :placeholder="t('detail.voice.fieldPlaceholder')" />
                     <span class="voice-field-actions">
-                      <button class="btn btn-sm" type="button" :disabled="voiceDescGen" @click.prevent="genVoiceDesc()">
-                        <span v-if="voiceDescGen" class="ring-spinner sm"></span>
-                        {{ voiceDescGen ? t('detail.voice.doing') : t('detail.voice.aiGen') }}
+                      <button class="btn btn-sm" type="button" :disabled="voiceDescBusy(editTarget)" @click.prevent="genVoiceDesc()">
+                        <span v-if="voiceDescBusy(editTarget)" class="ring-spinner sm"></span>
+                        {{ voiceDescBusy(editTarget) ? t('detail.voice.doing') : t('detail.voice.aiGen') }}
                       </button>
                       <span class="voice-hint">{{ t('detail.voice.fieldHint') }}</span>
                     </span>
@@ -507,12 +521,12 @@
                 <span class="dim">{{ t('detail.mat.finalPromptSub') }}</span>
                 <button
                   class="btn btn-sm mat-detail-prompt-gen"
-                  :disabled="finalPromptGen || !firstEpisodeId"
+                  :disabled="finalPromptBusy(editTarget) || !firstEpisodeId"
                   :title="firstEpisodeId ? t('detail.mat.genPromptTitle') : t('detail.mat.needEpisodeFirst')"
                   @click="generateFinalPrompt(editTarget)"
                 >
-                  <svg v-if="!finalPromptGen" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v3m0 12v3m9-9h-3M6 12H3m13.5-6.5L14 8m-4 8-2.5 2.5m11 0L16 16M8 8 5.5 5.5"/><circle cx="12" cy="12" r="3"/></svg>
-                  {{ finalPromptGen ? t('episode.asset.generating') + '…' : (editDraft.finalPrompt ? t('episode.sb.regenPrompt') : t('episode.asset.genPrompt')) }}
+                  <svg v-if="!finalPromptBusy(editTarget)" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v3m0 12v3m9-9h-3M6 12H3m13.5-6.5L14 8m-4 8-2.5 2.5m11 0L16 16M8 8 5.5 5.5"/><circle cx="12" cy="12" r="3"/></svg>
+                  {{ finalPromptBusy(editTarget) ? t('episode.asset.generating') + '…' : (editDraft.finalPrompt ? t('episode.sb.regenPrompt') : t('episode.asset.genPrompt')) }}
                 </button>
               </div>
               <textarea
@@ -604,17 +618,14 @@
             </div>
             <p v-if="voiceDialog.aiHint" class="voice-msg">{{ t('detail.voice.aiFilled') }}</p>
             <p class="voice-note">{{ t('detail.voice.note') }}</p>
+            <!-- 声音：已有卡 / 刚生成完就显示播放器（源 wav），不用再点一次试听 -->
+            <audio v-if="voiceDialog.audioUrl" :src="voiceDialog.audioUrl" controls class="voice-player" />
+            <p v-if="voiceDialog.msg" class="voice-msg">{{ voiceDialog.msg }}</p>
             <div class="voice-actions">
-              <button class="btn btn-sm" type="button" :disabled="voiceDialog.busy" @click="doVoicePreview">
-                <span v-if="voiceDialog.busy" class="ring-spinner sm"></span>
-                {{ voiceDialog.busy ? t('detail.voice.doing') : t('detail.voice.preview') }}
-              </button>
               <button class="btn btn-sm btn-primary" type="button" :disabled="voiceDialog.busy || !voiceDialog.base" @click="doVoiceGenerate">
                 {{ voiceDialog.hasCard ? t('detail.voice.regen') : t('detail.voice.generate') }}
               </button>
             </div>
-            <audio v-if="voiceDialog.audioUrl" :src="voiceDialog.audioUrl" controls class="voice-player" />
-            <p v-if="voiceDialog.msg" class="voice-msg">{{ voiceDialog.msg }}</p>
           </div>
         </section>
       </div>
@@ -910,7 +921,7 @@ async function openVoiceDialog(m) {
     open: true, id: m.id, name: m.name || '', sex,
     base: card.base || opts[0]?.id || '',
     desc: card.desc || '',            // 已有卡 → 用上次实际用的描述
-    busy: false, audioUrl: '', msg: '', hasCard: !!card.ready, aiHint: false,
+    busy: false, audioUrl: card.wav ? voiceCardAudioUrl(m.id) : '', msg: '', hasCard: !!card.ready, aiHint: false,
   }
   // 还没描述 → 取「生成角色提示词」时顺带产出的那份（AI 按角色自动填，可改）
   if (!voiceDialog.value.desc) {
@@ -930,21 +941,9 @@ function setVoiceSex(sex) {
   if (!opts.some(b => b.id === voiceDialog.value.base)) voiceDialog.value.base = opts[0]?.id || ''
 }
 function playBase(id) { if (id) voiceDialog.value.audioUrl = `/api/v1/voice/bases/${encodeURIComponent(id)}/audio` }
-async function doVoicePreview() {
-  const d = voiceDialog.value
-  if (!d.base || d.busy) return
-  d.busy = true; d.msg = ''
-  try {
-    const resp = await fetch('/api/v1/voice/preview', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ base: d.base, desc: d.desc }),
-    })
-    if (!resp.ok) throw new Error(String(resp.status))
-    d.audioUrl = URL.createObjectURL(await resp.blob())
-  } catch (e) {
-    d.msg = t('detail.voice.failed')
-  } finally { d.busy = false }
-}
+// 已生成声音卡的源 wav 地址（带时间戳：重抽后强制刷新，不吃缓存）
+function voiceCardAudioUrl(id) { return `/api/v1/voice/audio?id=${Number(id)}&t=${Date.now()}` }
+
 async function doVoiceGenerate() {
   const d = voiceDialog.value
   if (!d.base || d.busy) return
@@ -954,6 +953,7 @@ async function doVoiceGenerate() {
     // 已有卡时点「重新生成」= 强制重抽：否则会命中服务端内容指纹，复用旧卡（含修复前用错底生成的那些）
     await voiceAPI.generate({ id: d.id, base: d.base, desc: d.desc, force: !!d.hasCard })
     d.msg = t('detail.voice.done'); d.hasCard = true
+    d.audioUrl = voiceCardAudioUrl(d.id) // 生成完直接把刚出的这条挂到播放器（不用再点试听）
     await loadVoiceStatus()
   } catch (e) {
     d.msg = e?.message || t('detail.voice.failed')
@@ -969,22 +969,30 @@ function isPending(m) { return pendingMaterials.value.has(pendingKey(m)) }
 function voiceDescOf(m) { return voiceCards.value[String(m?.id)]?.voiceDesc || '' }
 
 // 「AI 重新生成」音色描述（force）：走 POST /voice/prompt，结果写回编辑框（保存后才落盘生效）
-const voiceDescGen = ref(false)
+// ⚠️ 与 finalPromptGen 同理：按「类型:id」逐项记账，别用单个布尔（否则一张卡在跑，别的弹层也显示生成中）
+const voiceDescGen = ref({})
+function voiceDescBusy(m) { return !!m && !!voiceDescGen.value[pendingKey(m)] }
 async function genVoiceDesc() {
   const tgt = editTarget.value
-  if (!tgt || tgt.kindKey !== 'character' || voiceDescGen.value) return
-  voiceDescGen.value = true
+  if (!tgt || tgt.kindKey !== 'character') return
+  const key = pendingKey(tgt)
+  if (voiceDescGen.value[key]) return
+  voiceDescGen.value = { ...voiceDescGen.value, [key]: true }
   try {
     const r = await voiceAPI.genPrompt(tgt.id, true)
     if (r?.desc) {
-      editDraft.voiceDesc = r.desc
+      const cur = editTarget.value
+      // 只回写「当前编辑的仍是同一个角色」——否则会把 A 的描述塞进 B 的编辑框
+      if (cur && cur.kindKey === tgt.kindKey && cur.id === tgt.id) editDraft.voiceDesc = r.desc
       toast.success(t('detail.voice.aiGenDone'))
       await loadVoiceStatus()
     }
   } catch (e) {
     toastError(e)
   } finally {
-    voiceDescGen.value = false
+    const next = { ...voiceDescGen.value }
+    delete next[key]
+    voiceDescGen.value = next
   }
 }
 
@@ -1104,12 +1112,17 @@ function openEdit(m) {
 }
 
 // 生成/重新生成最终提示词（不生图）：调用各类型 generate-prompt 接口，结果写回 draft
-const finalPromptGen = ref(false)
+// ⚠️ 必须按「类型:id」逐项记账（曾用单个布尔 → 一张卡在跑，**所有**弹层的按钮都变「生成中」且禁用，用户实测报过）
+const finalPromptGen = ref({})
 const firstEpisodeId = computed(() => drama.value?.episodes?.[0]?.id || null)
+function finalPromptBusy(m) { return !!m && !!finalPromptGen.value[pendingKey(m)] }
 async function generateFinalPrompt(m) {
   const epId = firstEpisodeId.value
   if (!epId) { toast.error(t('detail.mat.needEpisodeForPrompt')); return }
-  finalPromptGen.value = true
+  if (!m) return
+  const key = pendingKey(m)
+  if (finalPromptGen.value[key]) return
+  finalPromptGen.value = { ...finalPromptGen.value, [key]: true }
   try {
     let res
     if (m.kindKey === 'character') res = await characterAPI.generatePrompt(m.id, epId, true)
@@ -1117,13 +1130,20 @@ async function generateFinalPrompt(m) {
     else res = await propAPI.generatePrompt(m.id, epId, true)
     const fp = res?.final_prompt || res?.finalPrompt
     if (!fp) throw new Error(t('episode.asset.promptGenFailedRetry'))
-    editTarget.value = { ...m, finalPrompt: fp }
-    editDraft.finalPrompt = fp
+    await load() // 从库里刷新，各卡片都拿到新提示词
+    const cur = editTarget.value
+    // 只在「当前打开的仍是同一个资产」时回写编辑框；否则会把 A 的提示词塞进 B 的编辑框（保存即串味）
+    if (cur && cur.kindKey === m.kindKey && cur.id === m.id) {
+      editTarget.value = { ...cur, finalPrompt: fp }
+      editDraft.finalPrompt = fp
+    }
     toast.success(t('episode.asset.promptGenerated'))
   } catch (e) {
     toastError(e)
   } finally {
-    finalPromptGen.value = false
+    const next = { ...finalPromptGen.value }
+    delete next[key]
+    finalPromptGen.value = next
   }
 }
 
@@ -1157,6 +1177,19 @@ async function saveEdit() {
     toastError(e)
   } finally {
     editSaving.value = false
+  }
+}
+
+/* ===== 素材库「总刷新」：本页用到的数据一次全拉（等价于重新进页面） ===== */
+const assetsRefreshing = ref(false)
+async function refreshAssets() {
+  if (assetsRefreshing.value) return
+  assetsRefreshing.value = true
+  try {
+    await load()                                          // 剧集 + 资产（含 image_url / 状态）
+    await Promise.all([loadRefmodStatus(), loadVoiceStatus(), loadVoiceBases()]) // 卡状态 + 底样本库
+  } finally {
+    assetsRefreshing.value = false
   }
 }
 
@@ -1427,6 +1460,11 @@ onMounted(async () => { await load(); await loadRefmodStatus(); await loadVoiceB
 }
 
 /* ===== 素材库 ===== */
+/* 素材库顶部：左「全部/角色/场景/道具」筛选 + 右上角「刷新」 */
+.assets-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 16px; }
+.assets-head .asset-filter { margin-bottom: 0; }
+.assets-refresh { margin-left: auto; flex: 0 0 auto; display: inline-flex; align-items: center; gap: 6px; }
+
 .asset-filter { margin-bottom: 16px; }
 
 .asset-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 12px; align-items: stretch; }

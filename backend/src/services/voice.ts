@@ -87,6 +87,8 @@ export function voiceStatus(id: number): {
   desc: string
   /** 「生成角色提示词」时顺带产出的音色描述（声音面板/角色卡展示用；用户手改后以文件为准） */
   voiceDesc: string
+  /** 已生成声音卡的源 wav 在不在（前端据此决定显示不显示试听播放器） */
+  wav: boolean
 } {
   const name = voiceCardName(id)
   let ready = false
@@ -107,7 +109,7 @@ export function voiceStatus(id: number): {
   } catch {
     /* 没有参数记录 */
   }
-  return { name, ready, pending: pending.has(name), size, base, desc, voiceDesc: readVoicePrompt(id) }
+  return { name, ready, pending: pending.has(name), size, base, desc, wav: fs.existsSync(voiceWavPath(name)), voiceDesc: readVoicePrompt(id) }
 }
 
 /** 在抽中的任务（App 重启即丢；状态查询把它与文件状态合并） */

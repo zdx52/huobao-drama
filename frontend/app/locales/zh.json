@@ -212,6 +212,8 @@
       "emptyDesc": "在剧情工作台中通过「提取资产」生成角色、场景与道具后，会自动收录到这里，并可直接生成素材图。",
       "emptyKindTitle": "暂无{kind}素材",
       "emptyKindDesc": "在剧情工作台中提取并生成{kind}后，会显示在这里。",
+      "refresh": "刷新",
+      "refreshTitle": "重新拉取素材图与状态（身份卡 / 声音卡 / 底样本库）",
       "todoShort": "待补充"
     },
     "mat": {

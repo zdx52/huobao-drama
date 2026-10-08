@@ -212,6 +212,8 @@
       "emptyDesc": "Characters, scenes and props extracted in the production workbench will appear here, and you can generate images for them directly.",
       "emptyKindTitle": "No {kind} assets yet",
       "emptyKindDesc": "They will appear here after extraction and generation in the workbench.",
+      "refresh": "Refresh",
+      "refreshTitle": "Reload asset images and status (identity cards / voice cards / voice bases)",
       "todoShort": "TBD"
     },
     "mat": {

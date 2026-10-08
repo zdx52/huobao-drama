@@ -17,10 +17,16 @@ import {
   previewVoice,
   removeVoice,
   voiceBaseWavPath,
+  voiceCardName,
   voiceStatus,
+  voiceWavPath,
 } from '../services/voice.js'
-import { success, badRequest, serverError } from '../utils/response.js'
+import { success, badRequest, notFound, serverError } from '../utils/response.js'
 import { logTaskError } from '../utils/task-logger.js'
+// ⚠️ 音色描述（ensureVoiceDesc/readVoicePrompt/saveVoicePrompt）住在 services/voice-prompt.js，
+//    不是 services/voice.js。漏了这行 = 运行时 ReferenceError（AI 生成按钮报「音色描述生成失败」），
+//    而 esbuild 打包**不会**报错（未声明的标识符按全局处理）→ CI 绿、点按钮才炸。
+import { ensureVoiceDesc, readVoicePrompt, saveVoicePrompt } from '../services/voice-prompt.js'
 import fs from 'fs'
 
 const app = new Hono()
@@ -76,6 +82,20 @@ app.get('/bases/:id/audio', (c) => {
   return c.body(new Uint8Array(buf), 200, {
     'Content-Type': 'audio/wav',
     'Cache-Control': 'public, max-age=86400',
+  })
+})
+
+// 已生成声音卡的源 wav 试听（Mac 主副本 <data>/voices/<卡名>.wav；没生成过就 404）
+// 面板里「生成声音」完成后 / 再次打开面板时，前端拿这个地址直接播刚生成的那条
+app.get('/audio', (c) => {
+  const id = Number(c.req.query('id') || 0)
+  if (!id) return badRequest(c, 'id 必填')
+  const p = voiceWavPath(voiceCardName(id))
+  if (!fs.existsSync(p)) return notFound(c, '这个角色还没有生成声音')
+  const buf = fs.readFileSync(p)
+  return c.body(new Uint8Array(buf), 200, {
+    'Content-Type': 'audio/wav',
+    'Cache-Control': 'no-store',
   })
 })
 
