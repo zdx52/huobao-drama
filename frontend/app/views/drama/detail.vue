@@ -921,7 +921,8 @@ async function doVoiceGenerate() {
   d.busy = true; d.msg = t('detail.voice.doing')
   voiceBusy.value = { ...voiceBusy.value, [d.id]: true }
   try {
-    await voiceAPI.generate({ id: d.id, base: d.base, desc: d.desc })
+    // 已有卡时点「重新生成」= 强制重抽：否则会命中服务端内容指纹，复用旧卡（含修复前用错底生成的那些）
+    await voiceAPI.generate({ id: d.id, base: d.base, desc: d.desc, force: !!d.hasCard })
     d.msg = t('detail.voice.done'); d.hasCard = true
     await loadVoiceStatus()
   } catch (e) {
