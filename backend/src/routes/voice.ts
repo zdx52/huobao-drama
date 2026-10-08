@@ -9,6 +9,8 @@
  *   DELETE /voice?id=15                  → 清掉该角色的声音（卡+wav+参数）
  */
 import { Hono } from 'hono'
+import { eq } from 'drizzle-orm'
+import { db, schema } from '../db/index.js'
 import {
   extractVoiceCard,
   listVoiceBases,
@@ -30,6 +32,41 @@ app.get('/prompt', (c) => {
   const id = Number(c.req.query('id') || 0)
   if (!id) return badRequest(c, 'id 必填')
   return success(c, { desc: readVoicePrompt(id) })
+})
+
+// 用户手改音色描述（落文件，source=user）——只改描述，不动已有的声音卡
+app.put('/prompt', async (c) => {
+  try {
+    const body = await c.req.json()
+    const id = Number(body?.id || 0)
+    if (!id) return badRequest(c, 'id 必填')
+    const desc = String(body?.desc ?? '').trim().slice(0, 300)
+    saveVoicePrompt(id, desc, 'user')
+    return success(c, { desc })
+  } catch (err: any) {
+    logTaskError('VoiceDesc', 'save', { error: err?.message })
+    return serverError(c, err?.message || '保存音色描述失败')
+  }
+})
+
+// 让 AI（重新）生成音色描述并落盘；force=true 时忽略已有的重出
+app.post('/prompt', async (c) => {
+  try {
+    const body = await c.req.json()
+    const id = Number(body?.id || 0)
+    if (!id) return badRequest(c, 'id 必填')
+    const [char] = await db.select().from(schema.characters).where(eq(schema.characters.id, id))
+    if (!char) return badRequest(c, '角色不存在')
+    const desc = await ensureVoiceDesc(char, Boolean(body?.force), {
+      model: body?.text_model,
+      configId: body?.text_config_id ?? undefined,
+    })
+    if (!desc) return serverError(c, '音色描述生成失败（检查文本模型配置）')
+    return success(c, { desc })
+  } catch (err: any) {
+    logTaskError('VoiceDesc', 'generate', { error: err?.message })
+    return serverError(c, err?.message || '生成音色描述失败')
+  }
 })
 
 app.get('/bases/:id/audio', (c) => {

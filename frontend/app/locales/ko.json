@@ -257,7 +257,13 @@
       "regen": "재생성",
       "done": "음성 카드 생성됨",
       "failed": "생성 실패",
-      "aiFilled": "캐릭터 기준 자동 입력됨(수정 가능)"
+      "aiFilled": "캐릭터 기준 자동 입력됨(수정 가능)",
+      "field": "음색 설명: ",
+      "notGenerated": "미생성(캐릭터 편집에서 AI 생성 가능)",
+      "fieldPlaceholder": "예: 낮은 음색 / 차분한 어조 / 약간 느림 / 약한 동북 방언",
+      "fieldHint": "음질·감정·속도·음량·방언만. 연령과 음색은 베이스가 결정합니다.",
+      "aiGen": "AI 생성",
+      "aiGenDone": "음색 설명 재생성됨"
     }
   },
   "settings": {

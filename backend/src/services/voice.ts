@@ -18,6 +18,7 @@ import path from 'path'
 import fs from 'fs'
 import { STORAGE_ROOT } from '../utils/paths.js'
 import { refmodCardPath } from './refmod.js'
+import { readVoicePrompt } from './voice-prompt.js'
 import { getActiveConfig } from './ai.js'
 import { logTaskError, logTaskSuccess } from '../utils/task-logger.js'
 
@@ -84,6 +85,8 @@ export function voiceStatus(id: number): {
   size: number
   base: string
   desc: string
+  /** 「生成角色提示词」时顺带产出的音色描述（声音面板/角色卡展示用；用户手改后以文件为准） */
+  voiceDesc: string
 } {
   const name = voiceCardName(id)
   let ready = false
@@ -104,7 +107,7 @@ export function voiceStatus(id: number): {
   } catch {
     /* 没有参数记录 */
   }
-  return { name, ready, pending: pending.has(name), size, base, desc }
+  return { name, ready, pending: pending.has(name), size, base, desc, voiceDesc: readVoicePrompt(id) }
 }
 
 /** 在抽中的任务（App 重启即丢；状态查询把它与文件状态合并） */

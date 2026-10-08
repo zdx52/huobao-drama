@@ -240,6 +240,7 @@
                         <div class="character-visual-summary" :title="matDesc(m)">
                           <span>{{ t('episode.asset.appearance') }}{{ m.appearance || t('detail.assets.todoShort') }}</span>
                           <span>{{ t('episode.asset.styling') }}{{ m.styling || t('detail.assets.todoShort') }}</span>
+                          <span class="character-voice-summary" :class="{ dim: !voiceDescOf(m) }">{{ t('detail.voice.field') }}{{ voiceDescOf(m) || t('detail.voice.notGenerated') }}</span>
                         </div>
                       </div>
                       <div class="character-btn-row">
@@ -462,6 +463,18 @@
                   <label class="mat-detail-edit-field">
                     <span>{{ t('detail.mat.personaField') }}</span>
                     <textarea v-model="editDraft.description" class="textarea mat-detail-textarea" rows="4" :placeholder="t('detail.mat.personaPlaceholder')" />
+                  </label>
+                  <!-- 音色描述：生成角色提示词时 AI 已顺带写好，这里可看可改；改完在声音面板点「重新生成声音」才换音色 -->
+                  <label class="mat-detail-edit-field">
+                    <span>{{ t('detail.voice.field') }}</span>
+                    <textarea v-model="editDraft.voiceDesc" class="textarea mat-detail-textarea" rows="3" :placeholder="t('detail.voice.fieldPlaceholder')" />
+                    <span class="voice-field-actions">
+                      <button class="btn btn-sm" type="button" :disabled="voiceDescGen" @click.prevent="genVoiceDesc()">
+                        <span v-if="voiceDescGen" class="ring-spinner sm"></span>
+                        {{ voiceDescGen ? t('detail.voice.doing') : t('detail.voice.aiGen') }}
+                      </button>
+                      <span class="voice-hint">{{ t('detail.voice.fieldHint') }}</span>
+                    </span>
                   </label>
                 </div>
 
@@ -950,7 +963,29 @@ async function doVoiceGenerate() {
   }
 }
 
-function isPending(m) { return pendingMaterials.value.has(pendingKey(m)) }
+function voiceDescOf(m) { return voiceCards.value[String(m?.id)]?.voiceDesc || '' }
+
+// 「AI 重新生成」音色描述（force）：走 POST /voice/prompt，结果写回编辑框（保存后才落盘生效）
+const voiceDescGen = ref(false)
+async function genVoiceDesc() {
+  const tgt = editTarget.value
+  if (!tgt || tgt.kindKey !== 'character' || voiceDescGen.value) return
+  voiceDescGen.value = true
+  try {
+    const r = await voiceAPI.genPrompt(tgt.id, true)
+    if (r?.desc) {
+      editDraft.voiceDesc = r.desc
+      toast.success(t('detail.voice.aiGenDone'))
+      await loadVoiceStatus()
+    }
+  } catch (e) {
+    toastError(e)
+  } finally {
+    voiceDescGen.value = false
+  }
+}
+
+// ── 角色声音（2026-10-08 批次③）：底样本试听 + 生成/重抽声音卡 ──
 
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)) }
 
@@ -1055,7 +1090,7 @@ function openEdit(m) {
   // 按类型初始化 draft
   Object.keys(editDraft).forEach(k => delete editDraft[k])
   if (m.kindKey === 'character') {
-    Object.assign(editDraft, { name: m.name || '', role: m.role || '', appearance: m.appearance || '', description: m.description || '', styling: m.styling || '' })
+    Object.assign(editDraft, { name: m.name || '', role: m.role || '', appearance: m.appearance || '', description: m.description || '', styling: m.styling || '', voiceDesc: voiceDescOf(m) })
   } else if (m.kindKey === 'scene') {
     Object.assign(editDraft, { location: m.location || '', time: m.time || '', prompt: m.prompt || '', lighting: m.lighting || '' })
   } else {
@@ -1104,7 +1139,12 @@ async function saveEdit() {
   editSaving.value = true
   try {
     const fp = editDraft.finalPrompt || null
-    if (target.kindKey === 'character') await characterAPI.update(target.id, { name: editDraft.name, role: editDraft.role, appearance: editDraft.appearance, description: editDraft.description, styling: editDraft.styling, finalPrompt: fp })
+    if (target.kindKey === 'character') {
+      await characterAPI.update(target.id, { name: editDraft.name, role: editDraft.role, appearance: editDraft.appearance, description: editDraft.description, styling: editDraft.styling, finalPrompt: fp })
+      // 音色描述存文件（不是数据库字段）；只改描述不动已有声音卡
+      await voiceAPI.savePrompt(target.id, editDraft.voiceDesc || '')
+      await loadVoiceStatus()
+    }
     else if (target.kindKey === 'scene') await sceneAPI.update(target.id, { location: editDraft.location, time: editDraft.time, prompt: editDraft.prompt, lighting: editDraft.lighting, finalPrompt: fp })
     else await propAPI.update(target.id, { name: editDraft.name, type: editDraft.type, description: editDraft.description, finalPrompt: fp })
     toast.success(t('common.saved'))
@@ -1827,6 +1867,9 @@ onMounted(async () => { await load(); await loadRefmodStatus(); await loadVoiceB
 .mat-detail-primary-actions { display: flex; align-items: center; gap: 8px; }
 
 /* ── 角色声音面板（批次③，2026-10-08）── */
+.voice-field-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 6px; }
+.character-voice-summary { display: block; }
+.character-voice-summary.dim { color: var(--text-3); }
 .voice-overlay { align-items: center; }
 .voice-dialog { width: min(560px, 92vw); }
 .voice-body { display: flex; flex-direction: column; gap: 10px; padding: 14px 16px 16px; }

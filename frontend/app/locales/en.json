@@ -257,7 +257,13 @@
       "regen": "Regenerate",
       "done": "Voice card generated",
       "failed": "Generation failed",
-      "aiFilled": "Auto-filled from the character — edit if you like"
+      "aiFilled": "Auto-filled from the character — edit if you like",
+      "field": "Voice: ",
+      "notGenerated": "not generated (open the character editor to let AI write it)",
+      "fieldPlaceholder": "e.g. low-pitched; steady tone; slightly slow; light northeastern accent",
+      "fieldHint": "Only timbre / emotion / speed / volume / dialect. Age and timbre come from the base sample.",
+      "aiGen": "AI write",
+      "aiGenDone": "Voice description regenerated"
     }
   },
   "settings": {
