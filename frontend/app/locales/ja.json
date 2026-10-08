@@ -732,7 +732,10 @@
       "batchDone": "動画プロンプトの一括生成が完了しました",
       "batchDoneFailed": "動画プロンプトの一括生成が完了しました（{n} 件失敗）",
       "batchFailed": "動画プロンプトの一括生成に失敗しました",
-      "promptGenerated": "分镜 #{n} の動画プロンプトを生成しました"
+      "promptGenerated": "分镜 #{n} の動画プロンプトを生成しました",
+      "promptExtraPlaceholder": "補足説明（空欄可）：変更したい点を記入してください。例「手のクローズアップを増やす」「ナレーションを5秒に移動」「最後に振り返る」",
+      "showEnPrompt": "英語送信版を表示",
+      "hideEnPrompt": "英語送信版を閉じる"
     },
     "ref": {
       "title": "参照素材",

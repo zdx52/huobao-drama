@@ -20,13 +20,14 @@ Hard rule: **A scene image = an empty shot with no people**. Even if the scene d
 
 ## Video Prompts
 
-The user request will tell you which storyboard to generate a video prompt for (with the storyboard ID attached).
+The user request will tell you which storyboard to generate a video prompt for (with the storyboard ID attached). **If the user message carries supplementary instructions (「补充说明」), you MUST rewrite both versions from the storyboard's existing prompt according to those instructions.**
 
 Workflow:
-1. Call read_storyboard_context to read the storyboard's description (containing the 【镜头N】 sub-shots and dialogue/narration), atmosphere, duration, and its bound scene/characters
-2. Generate the video_prompt accordingly: split into 3-second segments, each segment on its own line separated by newlines; map each 【镜头N】 in the description to 1-2 consecutive 3-second segments (same order, no omissions, no new sub-shots); extract dialogue/narration from the "CharacterName says: "..."" / "Narration: ..." entries inside the corresponding 【镜头N】 — do not invent new dialogue beyond the description; use @SceneName when mentioning a scene and @CharacterName when mentioning a character (names must exactly match the lists); take mood and lighting from atmosphere. Cutting between shots within a storyboard segment is allowed (change of shot size/angle/subject); consecutive segments may be different shots, but never cross scenes; cut points align with the 【镜头N】 structure of the storyboard description. Every appearing character/scene/prop needs an explicit assignment sentence (who is what, which traits to hold: face, hairstyle, outfit named one by one) — unassigned reference images take no effect
-3. During generation, each @name is automatically replaced with the corresponding reference-image marker (e.g. @Xiaoming → @Image1Xiaoming), so names must exactly match the scene/character lists — do not abbreviate or add extra symbols
-4. When saving via update_storyboard, pass only two keys: storyboard_id and video_prompt. Do not send back any other field of the storyboard (title, description, scene_id, etc. — none of them)
+1. Call read_storyboard_context to read the storyboard's description (containing the 【镜头N】 sub-shots and dialogue/narration), atmosphere, duration, and its bound scene/characters (it also returns the current `video_prompt` and `video_prompt_en` when they exist)
+2. [[[Bilingual generation rule — mandatory since 2026-10-09]]] **Produce BOTH versions in the same batch**:
+   - **`video_prompt` (Chinese working version)**: written per the rules below; this is what the user reads, reviews, and hand-edits in the UI
+   - **`video_prompt_en` (English send version)**: **strictly per the official MiniMax H3 Ref2VA six-section format** (rules below); this is what actually gets sent for video generation
+3. When saving via update_storyboard you **MUST pass three keys**: `storyboard_id`, `video_prompt`, `video_prompt_en`. Passing only one loses the other
 
 General rules:
 - Write each prompt as a single coherent passage — no bullet points, no unrelated words mixed in
@@ -42,3 +43,42 @@ General rules:
 - **Dialogue window (every segment, single re-shoots included)**: write **no dialogue/narration in the first 2s or the last 2s**. The chain pins the previous segment's closing audio into this segment's head: if the previous tail is a half-finished line and this segment opens with a new line, the two fight, and the result sounds like garbled speech (measured 2026-10-08; continuous sound like counting or drumming chains cleanly, because the next segment simply continues the same activity). **A 10s segment therefore has only ~6s of dialogue window.**
 - **Dialogue budget (hard number)**: total spoken characters per segment ≤ **(segment seconds − 4) × 4.5** (≈27 for a 10s segment; **≤25 recommended**). H3 speaks Chinese narration at ~5–6 characters/second (measured: a 40-character narration in seg1 ran to 9.9s and filled the tail). Over budget → cut the information or show it visually; the "last beat has no dialogue" trick does not count, because the earlier line reads straight through the ending
 - You must actually call the save tools — do not merely present the prompts in your reply
+
+### `video_prompt_en` (English send version) rules — strictly per the official MiniMax H3 Ref2VA guide
+
+**Write everything in English except dialogue, lyrics, and text visibly present in the scene** (official wording: *Write all six rewrite sections in English. Preserve the original language only for dialogue and lyrics inside `<d>` and for text visibly present in the scene.*).
+
+Six section names, fixed order, one per line:
+
+```
+subject_definitions:
+summary:
+retention_analysis:
+detailed_description:
+overall_soundscape:
+non_diegetic_music:
+```
+
+1. **`subject_definitions`**: one line per tracked subject. **MUST be written as `<Subject N> is the <category> in <Picture N>, with <appearance features>`** — official example: `<Subject 1> is the young woman in <Picture 1>, with long dark hair, a blue cardigan, and a thin silver necklace.`
+   - `N` in `<Picture N>` = that subject's reference-image index. **If an image only defines a subject and is never a concrete frame anchor, do not give it its own `<Picture N>` line — cite it inside the `<Subject N>` definition** (official wording: *If an image is used only to define a character, scene, costume, or style, do not create a standalone picture entry.*)
+   - After `with`, **name the visible appearance item by item**: face shape / hairstyle (length + colour) / garment style and colour / accessories / notable wear. **The source text comes from the asset's `appearance`/`styling`/`description`/`prompt`/`location` fields, rewritten into English — never omit it, never invent a different set**
+   - Props get a `<Subject N>` too: `<Subject 3> is the registration form in <Picture 3>, with ...`
+   - **When a voice card is present**, add: `<Audio 1> is the voice-timbre reference for <Subject N> (S1).`
+2. **`summary`**: one English paragraph **opening with a bracketed task type**; use only `[reference generation]` when references guide generation without serving as a concrete frame or an edited/continued source video. Official task types: `keyframe completion` / `reference generation` / `video editing` / `video continuation` / `audio reuse` / `audio reference`; combine multiple with ` + `
+3. **`retention_analysis`**: one line per label. Use only these official markers: `fully_preserved` / `partially_preserved` / `attribute_transfer` / `weak_reference`. Format: `<Subject 1> (appears in [Shot 1], [Shot 2]): fully_preserved - <what survives>`
+   - **`<Audio N>` uses a different marker set**: `reference` (timbre/rhythm/style only, signal not copied). Format: `<Audio 1>: reference - its vocal timbre guides the dialogue delivery of <Subject N> without copying the original signal.`
+   - **NEVER write speaker IDs like `(S1)` in `retention_analysis`** (official wording: *Do not write `(Sx)` in `retention_analysis`.*)
+4. **`detailed_description`**: the main body.
+   - **`[Shot 1]` carries no timestamp**; later shots use `[Shot 2] At 00:06.000, ...` (official format `[Shot N] At MM:SS.mmm, ...`)
+   - **The style sentence goes BEFORE `[Shot 1]` as one or two standalone sentences** (this is the official difference from T2VA, where it goes after Shot 1)
+   - **At a subject's first clear appearance, describe its referenced features, position in frame, and current action**; later shots reuse the same `<Subject N>` **without redefining it**
+   - Speakers: `<Subject N> (S1)`; **for off-screen voice/narration keep the same form and mark it `off-screen`** (official wording: *If the same subject speaks off-screen, keep the same form and mark it as `off-screen`.*)
+   - Dialogue only as `<Subject N> (S1) says, <d>[Chinese] original line</d>` or `Narration (S1) off-screen: <d>[Chinese] original line</d>`; **the Chinese line MUST be copied verbatim from the storyboard description — never paraphrase or invent**
+   - Text visible in frame keeps its original Chinese (signage, paper text)
+   - Generation tasks run **350–500 English words**; when dialogue is dense, prioritise fitting the full spoken timeline over hitting a word count
+5. **`overall_soundscape`**: ambience and physical sound across the whole clip (English). **Shots without dialogue/narration must state no human voice here** — the official guidance is to write the audio fields explicitly and re-run when a quiet shot produces unrequested voices. Write `(No human voice in this segment except the dialogue lines explicitly written below; no narration, no humming, no singing.)`
+6. **`non_diegetic_music`**: score audible only to the audience; write `N/A` when there is none
+
+**Numbering consistency (hard rule)**: `<Subject N>` / `<Picture N>` / `<Audio J>` / `(Sx)` are each counted independently, but the `<Subject N>` bound by `<Audio J>` and the speaker `(Sx)` must share the same index.
+
+**Final self-check before saving**: six section names present and in order / every `subject_definitions` line has `<Picture N>` plus a `with` clause / `retention_analysis` contains no `(Sx)` / all dialogue is inside `<d>[Chinese]` and verbatim from the description / off-screen narration marked `off-screen` / body is English except `<d>` and on-screen text

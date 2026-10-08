@@ -195,6 +195,7 @@ const readStoryboardContext = createTool({
           description: sb.description || '',
           atmosphere: sb.atmosphere || '',
           video_prompt: sb.videoPrompt || '',
+          video_prompt_en: sb.videoPromptEn || '',
         }
       }))
 
@@ -237,6 +238,7 @@ const storyboardFields = z.object({
   atmosphere: z.string().optional(),
   image_prompt: z.string().optional(),
   video_prompt: z.string().optional(),
+  video_prompt_en: z.string().optional(),
   bgm_prompt: z.string().optional(),
   sound_effect: z.string().optional(),
   duration: z.number().optional(),
@@ -293,7 +295,8 @@ const saveStoryboards = createTool({
           location: sb.location, time: sb.time,
           description: sb.description, result: sb.result,
           atmosphere: sb.atmosphere, imagePrompt: sb.image_prompt,
-          videoPrompt: sb.video_prompt, bgmPrompt: sb.bgm_prompt,
+          videoPrompt: sb.video_prompt, videoPromptEn: sb.video_prompt_en,
+          bgmPrompt: sb.bgm_prompt,
           soundEffect: sb.sound_effect,
           sceneId: sb.scene_id, duration: sb.duration || 10,
           updatedAt: ts,
@@ -309,7 +312,8 @@ const saveStoryboards = createTool({
           location: sb.location, time: sb.time,
           description: sb.description, result: sb.result,
           atmosphere: sb.atmosphere, imagePrompt: sb.image_prompt,
-          videoPrompt: sb.video_prompt, bgmPrompt: sb.bgm_prompt,
+          videoPrompt: sb.video_prompt, videoPromptEn: sb.video_prompt_en,
+          bgmPrompt: sb.bgm_prompt,
           soundEffect: sb.sound_effect,
           sceneId: sb.scene_id, duration: sb.duration || 10,
           createdAt: ts, updatedAt: ts,
@@ -356,6 +360,7 @@ const updateStoryboard = createTool({
     atmosphere: z.string().optional(),
     image_prompt: z.string().optional(),
     video_prompt: z.string().optional(),
+    video_prompt_en: z.string().optional(),
     bgm_prompt: z.string().optional(),
     sound_effect: z.string().optional(),
     description: z.string().optional(),
@@ -417,6 +422,7 @@ const updateStoryboard = createTool({
     if ('atmosphere' in fields) updates.atmosphere = fields.atmosphere
     if ('image_prompt' in fields) updates.imagePrompt = fields.image_prompt
     if ('video_prompt' in fields) updates.videoPrompt = fields.video_prompt
+    if ('video_prompt_en' in fields) updates.videoPromptEn = fields.video_prompt_en
     if ('bgm_prompt' in fields) updates.bgmPrompt = fields.bgm_prompt
     if ('sound_effect' in fields) updates.soundEffect = fields.sound_effect
     if ('description' in fields) updates.description = fields.description

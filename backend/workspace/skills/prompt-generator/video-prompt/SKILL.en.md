@@ -7,6 +7,11 @@ description: Video prompt specification — generates a time-segmented video-gen
 
 From a single storyboard segment's description (containing the 【镜头N】 sub-shot structure and dialogue/narration) / atmosphere / duration, generate the `video_prompt` that drives AI video generation. **One storyboard segment = one 8-15-second video, with cuts allowed inside it**: consecutive segments may be different shots (change of shot size/angle/subject), joined with hard cuts; but the whole segment **never crosses scenes** and never uses flashbacks.
 
+> **Mandatory since 2026-10-09: produce BOTH versions in one batch.**
+> `video_prompt` (Chinese working version — what the UI shows and the user edits) + `video_prompt_en` (English send version — what is actually sent for video generation).
+> The English rules live in the "English send version (official H3 Ref2VA six sections)" section at the end of this file; everything below is the Chinese version's rules.
+> When saving you must pass three keys: `storyboard_id`, `video_prompt`, `video_prompt_en`.
+
 ## Format
 
 The **first line of the `video_prompt` is the header**: first introduce which characters and scene appear in this video, then follow with the time segments. Characters and scenes are always referenced with @ (during generation they are replaced with the corresponding reference-image markers, so the video model first locks onto "who" and "where").
@@ -137,3 +142,40 @@ From segment 2 on, the **runner automatically prepends the airlock head** (hold 
 ## Saving
 
 Call `update_storyboard` to update only this storyboard segment's `video_prompt` field; do not modify any other field, and do not re-breakdown the whole episode.
+
+## English send version (official H3 Ref2VA six sections) — established 2026-10-09
+
+`video_prompt_en` is **the version actually sent to the video model**. Its rules come from the official MiniMax H3 prompt-writing guide (Ref2VA full-reference rewrite output format). **Everything is English except dialogue, lyrics, and text visible in frame.**
+
+Six section names, fixed order:
+
+```
+subject_definitions:
+summary:
+retention_analysis:
+detailed_description:
+overall_soundscape:
+non_diegetic_music:
+```
+
+1. **`subject_definitions`** — one line per tracked subject, **always `<Subject N> is the <category> in <Picture N>, with <appearance features>`**
+   - Official example: `<Subject 1> is the young woman in <Picture 1>, with long dark hair, a blue cardigan, and a thin silver necklace.`
+   - **After `with`, name the visible appearance item by item**: face shape / hairstyle (length + colour) / garment style and colour / accessories / notable wear. **Source it from the asset's `appearance`/`styling`/`description`/`prompt`/`location` fields rewritten into English — never omit, never invent a different set**
+   - **An image that only defines a subject and never acts as a frame anchor gets no standalone `<Picture N>` line** — cite it inside the `<Subject N>` definition (official: *If an image is used only to define a character, scene, costume, or style, do not create a standalone picture entry.*)
+   - With a voice card, add `<Audio 1> is the voice-timbre reference for <Subject N> (S1).`
+2. **`summary`** — one English paragraph **opening with a bracketed task type**; this pipeline always uses `[reference generation]` (references guide generation without serving as a first frame/keyframe and without being an edited or continued source video). Official types: `keyframe completion` / `reference generation` / `video editing` / `video continuation` / `audio reuse` / `audio reference`; combine with ` + `
+3. **`retention_analysis`** — one line per label; markers only `fully_preserved` / `partially_preserved` / `attribute_transfer` / `weak_reference`
+   - `<Audio N>` uses `reference`: `<Audio 1>: reference - its vocal timbre guides the dialogue delivery of <Subject N> without copying the original signal.`
+   - **Never write speaker IDs like `(S1)` here** (official: *Do not write `(Sx)` in `retention_analysis`.*)
+4. **`detailed_description`** — the body
+   - **`[Shot 1]` carries no timestamp**; later shots use `[Shot 2] At 00:06.000, ...`
+   - **The style sentence goes BEFORE `[Shot 1]` as one or two standalone sentences** (T2VA puts it after Shot 1; Ref2VA puts it before — an official difference)
+   - At a subject's **first clear appearance**, describe its features, position in frame, and current action; later shots reuse the same `<Subject N>` **without redefining it**
+   - Speakers: `<Subject N> (S1)`; **off-screen voice/narration is marked `off-screen`** (official: *If the same subject speaks off-screen, keep the same form and mark it as `off-screen`.*)
+   - Dialogue only as `<d>[Chinese] original line</d>`, **copied verbatim from the storyboard description — never paraphrase or invent**
+   - Text visible in frame keeps its original Chinese
+   - Generation bodies run **350-500 English words**
+5. **`overall_soundscape`** — ambience (English); shots without dialogue state no human voice: `(No human voice in this segment except the dialogue lines explicitly written below; no narration, no humming, no singing.)`
+6. **`non_diegetic_music`** — score audible only to the audience; `N/A` when absent
+
+**Self-check before saving**: six sections present and in order / every `subject_definitions` line has `<Picture N>` plus a `with` clause / `retention_analysis` contains no `(Sx)` / all dialogue inside `<d>[Chinese]` and verbatim from the description / off-screen narration marked `off-screen` / body is English except `<d>` and on-screen text

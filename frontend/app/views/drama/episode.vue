@@ -692,6 +692,24 @@
                       :placeholder="t('episode.inspector.videoPromptPlaceholder')"
                       @commit="v => updateField(selectedSb, 'video_prompt', v)"
                     />
+                    <!-- 2026-10-09：补充说明（可留空直接生成）+ 英文发送版折叠区 -->
+                    <div class="video-inspector-prompt-extra">
+                      <textarea
+                        v-model="videoPromptExtra"
+                        class="textarea video-inspector-prompt-note"
+                        rows="2"
+                        :placeholder="t('episode.sb.promptExtraPlaceholder')"
+                      ></textarea>
+                      <button
+                        v-if="(selectedSb.video_prompt_en || selectedSb.videoPromptEn)"
+                        type="button"
+                        class="btn btn-sm video-inspector-prompt-en-toggle"
+                        @click="showVideoPromptEn = !showVideoPromptEn"
+                      >
+                        {{ showVideoPromptEn ? t('episode.sb.hideEnPrompt') : t('episode.sb.showEnPrompt') }}
+                      </button>
+                      <pre v-if="showVideoPromptEn && (selectedSb.video_prompt_en || selectedSb.videoPromptEn)" class="video-inspector-prompt-en">{{ selectedSb.video_prompt_en || selectedSb.videoPromptEn }}</pre>
+                    </div>
                   </section>
               </div>
               </div>
@@ -2799,6 +2817,9 @@ async function syncExtractStatus() {
 const videoPromptBatch = ref({ running: false, total: 0, completed: 0 })
 // 单个视频提示词生成：按分镜 ID 跟踪，允许不同分镜并行生成（不走全局 rn 锁）
 const videoPromptGeneratingIds = ref([])
+// 2026-10-09：视频提示词「补充说明」（可留空）；英文发送版折叠开关（默认收起）
+const videoPromptExtra = ref('')
+const showVideoPromptEn = ref(false)
 // 视频制作页多选快捷操作：全选 / 仅选未生成视频（勾选集与批量视频共用 selectedVideoSbIds）
 function toggleSelectAllVideos() {
   selectedVideoSbIds.value = selectedVideoSbIds.value.length === sbs.value.length ? [] : sbs.value.map(sb => sb.id)
@@ -2885,7 +2906,8 @@ async function onBreakdownDone() {
   if (missing.length) batchVideoPrompts()
 }
 
-// 按需为单个分镜生成视频提示词：由 prompt_generator 读取分镜字段生成并保存到 video_prompt
+// 按需为单个分镜生成视频提示词：由 prompt_generator 读取分镜字段生成并保存到 video_prompt / video_prompt_en
+// 2026-10-09：补充说明（videoPromptExtra，可留空）随请求一起回喂；同批出中文工作版 + 英文官方六段式版
 async function genVideoPrompt(sb) {
   if (!sb || videoPromptGeneratingIds.value.includes(sb.id)) return
   const idx = sbs.value.indexOf(sb) + 1
@@ -2893,14 +2915,21 @@ async function genVideoPrompt(sb) {
   const label = cfg ? `${cfg.name} (${cfg.provider})` : '默认'
   const charNames = getStoryboardCharacters(sb).map(c => c.name).join('、') || '无'
   const propNames = getStoryboardProps(sb).map(p => p.name).join('、') || '无'
+  const extra = (videoPromptExtra.value || '').trim()
+  const extraBlock = extra
+    ? `\n\n【补充说明 — 必须在生成时逐条满足】\n${extra}\n（若该分镜已有 video_prompt / video_prompt_en，read_storyboard_context 会返回现值，请在其基础上按补充说明改写，不要把补充说明当新剧情编造。）`
+    : ''
   videoPromptGeneratingIds.value.push(sb.id)
   try {
     await api.post(`/agent/prompt_generator/chat`, {
-      message: `请为分镜 #${idx}(ID:${sb.id})生成视频提示词(video_prompt)。视频模型:${label},请根据该模型的特性和时长限制生成。
+      message: `请为分镜 #${idx}(ID:${sb.id})生成视频提示词。视频模型:${label},请根据该模型的特性和时长限制生成。${extraBlock}
 
 该分镜信息:时长 ${sb.duration || 10}s;场景:${getSceneName(sb) || '未绑定'};角色:${charNames};道具:${propNames}。
 
-请先调用 read_storyboard_context 获取该分镜的画面描述(含【镜头N】子镜头与台词/旁白)、氛围及时长,据此生成 video_prompt(按 3 秒分段换行、用 @角色名/@场景名/@道具名 引用参考素材；段落内允许多镜头切镜,但不跨场景,切镜点对齐 description 的【镜头N】结构),然后调用 update_storyboard 保存到分镜 ID:${sb.id}。只更新 video_prompt 字段,不要改动其他字段,不要重新拆分整集。`,
+请先调用 read_storyboard_context 获取该分镜的画面描述(含【镜头N】子镜头与台词/旁白)、氛围及时长，据此**同批生成两份**：
+1. video_prompt = 中文工作版（按 video-prompt 技能的既有规则：按 3 秒分段换行、用 @角色名/@场景名/@道具名 引用参考素材、段落内允许多镜头切镜但不跨场景、切镜点对齐 description 的【镜头N】结构）
+2. video_prompt_en = H3 官方 Ref2VA 六段式英文版（严格按 video-prompt 技能「英文发送版」节）
+然后调用 update_storyboard 保存，**必须同时传三个键: storyboard_id、video_prompt、video_prompt_en**。不要改动其他字段,不要重新拆分整集。`,
       drama_id: dramaId,
       episode_id: epId.value,
       model: chatModelOverride() || undefined,
@@ -3072,6 +3101,9 @@ async function loadSbVideoHistory() {
 }
 
 watch(() => [selectedSb.value?.id, getVideoUrl(selectedSb.value)], () => { loadSbVideoHistory() })
+
+// 2026-10-09：切换分镜时收起英文版（英文区是按分镜的，别把上一条的展开状态带过来）
+watch(() => selectedSb.value?.id, () => { showVideoPromptEn.value = false })
 
 function previewHistoryVideo(t) {
   previewVideoUrl.value = isCurrentVideo(t) ? '' : taskVideoPath(t)
@@ -3277,8 +3309,9 @@ function getShotReferenceIndexMap(sb) {
 }
 
 // 将视频提示词里的 @名字 替换为 @图片N名字（N 为参考图序号，1 起），生成时使用
+// 2026-10-09：优先用英文版 video_prompt_en（H3 官方六段式）；没有（老数据/未生成英文版）时退回中文版
 function resolveVideoPromptRefs(sb) {
-  const prompt = sb.video_prompt || sb.videoPrompt || ''
+  const prompt = sb.video_prompt_en || sb.videoPromptEn || sb.video_prompt || sb.videoPrompt || ''
   const map = getShotReferenceIndexMap(sb)
   const names = Object.keys(map).sort((a, b) => b.length - a.length)
   if (!names.length) return prompt
@@ -5235,6 +5268,37 @@ button.video-task-metric.on { box-shadow: 0 0 0 2px var(--accent); }
   min-height: 176px;
   font-size: 13px;
   line-height: 1.6;
+}
+/* 2026-10-09：补充说明输入框 + 英文发送版折叠区（默认收起） */
+.video-inspector-prompt-extra {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
+}
+.video-inspector-prompt-note {
+  min-height: 44px;
+  font-size: 12px;
+  line-height: 1.5;
+  resize: vertical;
+}
+.video-inspector-prompt-en-toggle {
+  align-self: flex-start;
+}
+.video-inspector-prompt-en {
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-muted);
+  color: var(--text-1);
+  font-family: var(--font-mono, monospace);
+  font-size: 11px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 320px;
+  overflow: auto;
 }
 .video-inspector-params { display: grid; gap: 8px; }
 .video-inspector-params div { display: flex; justify-content: space-between; gap: 12px; font-size: 12px; }

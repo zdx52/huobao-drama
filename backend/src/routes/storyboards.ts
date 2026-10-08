@@ -131,6 +131,7 @@ app.put('/:id', async (c) => {
     title: 'title', description: 'description', shot_type: 'shotType',
     angle: 'angle', movement: 'movement', duration: 'duration',
     video_prompt: 'videoPrompt',
+    video_prompt_en: 'videoPromptEn',
     image_prompt: 'imagePrompt', scene_id: 'sceneId', location: 'location',
     time: 'time', atmosphere: 'atmosphere', result: 'result',
     bgm_prompt: 'bgmPrompt', sound_effect: 'soundEffect',

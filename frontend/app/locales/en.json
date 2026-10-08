@@ -732,7 +732,10 @@
       "batchDone": "Batch video prompt generation complete",
       "batchDoneFailed": "Batch video prompt generation complete, {n} failed",
       "batchFailed": "Batch video prompt generation failed",
-      "promptGenerated": "Video prompt for shot #{n} generated"
+      "promptGenerated": "Video prompt for shot #{n} generated",
+      "promptExtraPlaceholder": "Supplementary notes (optional): write what you want changed, e.g. \"add a close-up of the hands\", \"move the narration to 5s\", \"end with a look back\"",
+      "showEnPrompt": "View English send version",
+      "hideEnPrompt": "Hide English send version"
     },
     "ref": {
       "title": "Reference Assets",

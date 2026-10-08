@@ -120,6 +120,7 @@ export const storyboards = sqliteTable('storyboards', {
   atmosphere: text('atmosphere'),
   imagePrompt: text('image_prompt'),
   videoPrompt: text('video_prompt'),
+  videoPromptEn: text('video_prompt_en'),
   bgmPrompt: text('bgm_prompt'),
   soundEffect: text('sound_effect'),
   description: text('description'),

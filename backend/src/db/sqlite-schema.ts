@@ -98,6 +98,7 @@ export const sqliteSchemaStatements = [
     atmosphere TEXT,
     image_prompt TEXT,
     video_prompt TEXT,
+    video_prompt_en TEXT,
     bgm_prompt TEXT,
     sound_effect TEXT,
     description TEXT,
@@ -114,6 +115,10 @@ export const sqliteSchemaStatements = [
     updated_at TEXT NOT NULL,
     deleted_at TEXT
   )`,
+
+  // 2026-10-09 双语提示词：video_prompt_en 存 H3 官方 Ref2VA 六段式英文版（发送侧优先用它），
+  // video_prompt 仍是中文工作版（界面显示/编辑/补充说明）。老库幂等补列，老数据为 NULL。
+  `ALTER TABLE storyboards ADD COLUMN video_prompt_en TEXT`,
 
   `CREATE TABLE IF NOT EXISTS episode_characters (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -376,7 +381,14 @@ const REMOVE_SQL = 'DELETE FROM style_presets WHERE "value" = ? AND "prompt" = ?
 
 export function initSqliteSchema(sqlite: Database.Database) {
   for (const statement of sqliteSchemaStatements) {
-    sqlite.exec(statement)
+    // ALTER ADD COLUMN 幂等：列已存在时 SQLite 抛 "duplicate column name"，
+    // 该错误可忽略（老库第二次启动、或列已在库里时属正常）
+    try {
+      sqlite.exec(statement)
+    } catch (err: any) {
+      if (/duplicate column name/i.test(String(err?.message || err))) continue
+      throw err
+    }
   }
   const insertSeed = sqlite.prepare(SEED_SQL)
   const upgradeSeed = sqlite.prepare(UPGRADE_SQL)

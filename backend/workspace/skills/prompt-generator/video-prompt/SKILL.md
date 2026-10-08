@@ -7,6 +7,11 @@ description: 视频提示词规范 — 根据分镜段落内容生成按时间�
 
 根据单个分镜段落的 description（含【镜头N】子镜头结构与台词/旁白）/ atmosphere / duration，生成驱动 AI 视频生成的 `video_prompt`。**一个分镜段落 = 一段 8-10 秒的视频，内部允许切镜**：段与段之间可以是不同镜头（换景别/角度/对象），用硬切衔接；但**全程不跨场景**、不闪回。
 
+> **2026-10-09 起：同批产出两份（必读）**
+> `video_prompt`（中文工作版，界面显示/编辑）+ `video_prompt_en`（英文发送版，视频生成实际发送）。
+> 英文版规则见本文件末尾「英文发送版（H3 官方 Ref2VA 六段式）」节；中文版规则就是下面全部既有内容。
+> 保存时必须同时传 `storyboard_id` / `video_prompt` / `video_prompt_en` 三个键。
+
 ## 格式
 
 `video_prompt` 的**第一行是信息头**：先介绍这条视频有哪些人物和场景，然后再接时间分段。人物、场景一律用 @ 引用（生成时会替换为对应参考图片标记，让视频模型先对上"谁"和"在哪"）。
@@ -139,3 +144,40 @@ description: 视频提示词规范 — 根据分镜段落内容生成按时间�
 ## 保存
 
 调用 `update_storyboard` 仅更新该分镜段落的 `video_prompt` 字段，不要改动其他字段，不要重新拆分整集。
+
+## 英文发送版（H3 官方 Ref2VA 六段式）— 2026-10-09 立规
+
+`video_prompt_en` 是**真正发给视频模型的那一份**，规则来源 = MiniMax 官方 H3 提示词写作指南（Ref2VA 全参考模式改写输出格式）。**除对话、歌词与画面内可见文字外全部英文。**
+
+六个段名固定、顺序固定：
+
+```
+subject_definitions:
+summary:
+retention_analysis:
+detailed_description:
+overall_soundscape:
+non_diegetic_music:
+```
+
+1. **`subject_definitions`** — 每个出场主体一行，**必须是 `<Subject N> is the <类别> in <Picture N>, with <外观特征>`**
+   - 官方示例原文：`<Subject 1> is the young woman in <Picture 1>, with long dark hair, a blue cardigan, and a thin silver necklace.`
+   - **`with` 后面把可见外观逐个点名**：脸型 / 发型（长度+颜色）/ 服装款式颜色 / 配饰 / 显著磨损。**外貌原文取自资产 `appearance`/`styling`/`description`/`prompt`/`location` 字段转写英文，不得省略、不得另编**
+   - **只用于定义主体、不当帧锚点的图，不要给它独立 `<Picture N>` 行**，只在 `<Subject N>` 定义里引用（官方：*If an image is used only to define a character, scene, costume, or style, do not create a standalone picture entry.*）
+   - 有声音卡时加一行 `<Audio 1> is the voice-timbre reference for <Subject N> (S1).`
+2. **`summary`** — 一段英文，**以方括号任务类型开头**；本管线统一用 `[reference generation]`（有参考图但不以某图为首帧/关键帧、也不是编辑或续拍源视频时）。官方类型表：`keyframe completion` / `reference generation` / `video editing` / `video continuation` / `audio reuse` / `audio reference`，多关系用 ` + `
+3. **`retention_analysis`** — 每个标签一行，关系词只能用 `fully_preserved` / `partially_preserved` / `attribute_transfer` / `weak_reference`
+   - `<Audio N>` 用 `reference`：`<Audio 1>: reference - its vocal timbre guides the dialogue delivery of <Subject N> without copying the original signal.`
+   - **本段严禁出现 `(S1)` 这类说话人编号**（官方：*Do not write `(Sx)` in `retention_analysis`.*）
+4. **`detailed_description`** — 正文
+   - **`[Shot 1]` 不加时间戳**，后续镜头 `[Shot 2] At 00:06.000, ...`
+   - **风格句写在 `[Shot 1]` 之前、单独一两句**（T2VA 写在 Shot1 之后，Ref2VA 写在之前——这是官方差异点）
+   - 主体**首次清晰出现时**描述外观特征 + 画面位置 + 当前动作；后续镜头沿用同一 `<Subject N>`，**不重复定义**
+   - 说话人 `<Subject N> (S1)`；**画外音/旁白加 `off-screen`**（官方：*If the same subject speaks off-screen, keep the same form and mark it as `off-screen`.*）
+   - 台词只写 `<d>[Chinese] 原文</d>`，**中文逐字取自分镜 description，禁止改写或自编**
+   - 画面内可见文字保留中文原文
+   - 生成类正文 **350–500 英文词**
+5. **`overall_soundscape`** — 环境音（英文）；无台词镜头写死无人声明 `(No human voice in this segment except the dialogue lines explicitly written below; no narration, no humming, no singing.)`
+6. **`non_diegetic_music`** — 观众才能听到的配乐；无则 `N/A`
+
+**保存前自检**：六段名齐全且顺序对 / 每行 `subject_definitions` 都有 `<Picture N>` + `with` 外观 / `retention_analysis` 无 `(Sx)` / 台词全在 `<d>[Chinese]` 且逐字来自 description / 画外音标了 `off-screen` / 正文英文（除 `<d>` 与画面文字）
