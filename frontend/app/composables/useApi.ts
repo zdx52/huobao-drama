@@ -101,6 +101,8 @@ export const refmodAPI = {
 export const voiceAPI = {
   bases: () => api.get<{ line: string; bases: any[] }>('/voice/bases'),
   status: (ids: number[]) => api.get(`/voice/status?ids=${encodeURIComponent(ids.join(','))}`),
+  // 「生成角色提示词」时顺带产出的音色描述（面板自动带出）
+  prompt: (id: number) => api.get<{ desc: string }>(`/voice/prompt?id=${id}`),
   generate: (data: { id: number; base: string; desc?: string; force?: boolean }) => api.post('/voice/generate', data),
   del: (id: number) => api.del(`/voice?id=${id}`),
 }

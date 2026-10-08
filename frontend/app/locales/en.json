@@ -256,7 +256,8 @@
       "generate": "Generate voice",
       "regen": "Regenerate",
       "done": "Voice card generated",
-      "failed": "Generation failed"
+      "failed": "Generation failed",
+      "aiFilled": "Auto-filled from the character — edit if you like"
     }
   },
   "settings": {

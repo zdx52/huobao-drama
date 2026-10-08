@@ -589,6 +589,7 @@
               <span class="voice-label">{{ t('detail.voice.desc') }}</span>
               <input v-model="voiceDialog.desc" class="voice-input" :placeholder="t('detail.voice.descHint')" maxlength="60" />
             </div>
+            <p v-if="voiceDialog.aiHint" class="voice-msg">{{ t('detail.voice.aiFilled') }}</p>
             <p class="voice-note">{{ t('detail.voice.note') }}</p>
             <div class="voice-actions">
               <button class="btn btn-sm" type="button" :disabled="voiceDialog.busy" @click="doVoicePreview">
@@ -887,11 +888,27 @@ function guessVoiceSex(m) {
   const s = `${m?.name || ''}${m?.role || ''}${m?.appearance || ''}`
   return /女|妈|姐|妹|婆|姨|嫂|妮|娥|娘|妇/.test(s) ? 'female' : 'male'
 }
-function openVoiceDialog(m) {
-  if (!voiceBases.value.length) loadVoiceBases()
+async function openVoiceDialog(m) {
+  if (!voiceBases.value.length) await loadVoiceBases()
   const sex = guessVoiceSex(m)
   const opts = voiceBases.value.filter(b => b.sex === sex)
-  voiceDialog.value = { open: true, id: m.id, name: m.name || '', sex, base: opts[0]?.id || '', desc: '', busy: false, audioUrl: '', msg: '', hasCard: voiceReady(m) }
+  const card = voiceCards.value[String(m.id)] || {}
+  voiceDialog.value = {
+    open: true, id: m.id, name: m.name || '', sex,
+    base: card.base || opts[0]?.id || '',
+    desc: card.desc || '',            // 已有卡 → 用上次实际用的描述
+    busy: false, audioUrl: '', msg: '', hasCard: !!card.ready, aiHint: false,
+  }
+  // 还没描述 → 取「生成角色提示词」时顺带产出的那份（AI 按角色自动填，可改）
+  if (!voiceDialog.value.desc) {
+    try {
+      const r = await voiceAPI.prompt(m.id)
+      if (r?.desc && voiceDialog.value.open && voiceDialog.value.id === m.id) {
+        voiceDialog.value.desc = r.desc
+        voiceDialog.value.aiHint = true
+      }
+    } catch { /* 没有就没填，手输也行 */ }
+  }
 }
 function closeVoiceDialog() { voiceDialog.value.open = false }
 function setVoiceSex(sex) {

@@ -25,6 +25,13 @@ const app = new Hono()
 
 app.get('/bases', (c) => success(c, listVoiceBases()))
 
+// 角色提示词生成时顺带产出的音色描述（声音面板自动带出；可手改）
+app.get('/prompt', (c) => {
+  const id = Number(c.req.query('id') || 0)
+  if (!id) return badRequest(c, 'id 必填')
+  return success(c, { desc: readVoicePrompt(id) })
+})
+
 app.get('/bases/:id/audio', (c) => {
   const p = voiceBaseWavPath(c.req.param('id'))
   if (!p) return badRequest(c, '底样本不存在')

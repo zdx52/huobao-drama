@@ -6,6 +6,7 @@ import { toSnakeCase } from '../utils/transform.js'
 import { generateImage } from '../services/generation.js'
 import { getDramaStylePrompt } from '../services/style-preset.js'
 import { ensureCharacterFinalPrompt } from '../services/final-prompt.js'
+import { ensureVoiceDesc } from '../services/voice-prompt.js'
 import { removeRefmod } from '../services/refmod.js'
 import { removeVoice } from '../services/voice.js'
 import { logTaskError, logTaskStart, logTaskSuccess } from '../utils/task-logger.js'
@@ -124,7 +125,12 @@ app.post('/:id/generate-prompt', async (c) => {
     return badRequest(c, '最终提示词生成失败，请重试')
   }
   logTaskSuccess('FinalPrompt', 'character-generate', { characterId: id })
-  return success(c, { final_prompt: finalPrompt })
+  // 顺带生成该角色的音色描述（声音面板自动带出；失败不阻断）
+  const voiceDesc = await ensureVoiceDesc(char, !!body.force, {
+    model: body.text_model,
+    configId: body.text_config_id ?? undefined,
+  })
+  return success(c, { final_prompt: finalPrompt, voice_desc: voiceDesc })
 })
 
 // POST /characters/batch-generate-images

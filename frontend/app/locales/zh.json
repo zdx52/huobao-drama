@@ -256,7 +256,8 @@
       "generate": "生成声音",
       "regen": "重新生成",
       "done": "声音卡已生成",
-      "failed": "生成失败"
+      "failed": "生成失败",
+      "aiFilled": "已按角色自动填好，可直接用或修改"
     }
   },
   "settings": {

@@ -256,7 +256,8 @@
       "generate": "음성 생성",
       "regen": "재생성",
       "done": "음성 카드 생성됨",
-      "failed": "생성 실패"
+      "failed": "생성 실패",
+      "aiFilled": "캐릭터 기준 자동 입력됨(수정 가능)"
     }
   },
   "settings": {
