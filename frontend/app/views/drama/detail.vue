@@ -884,7 +884,7 @@ async function makeRefmodCard(m) {
 const voiceBases = ref([])
 const voiceCards = ref({})
 const voiceBusy = ref({})
-const voiceDialog = ref<any>({ open: false, id: 0, name: '', sex: 'male', base: '', desc: '', busy: false, audioUrl: '', msg: '', hasCard: false })
+const voiceDialog = ref({ open: false, id: 0, name: '', sex: 'male', base: '', desc: '', busy: false, audioUrl: '', msg: '', hasCard: false })
 function voiceBusyOne(m) { return !!voiceBusy.value[m.id] }
 function voiceBusyAny(m) { return voiceBusyOne(m) || isPending(m) }
 function voiceReady(m) { return !!voiceCards.value[String(m.id)]?.ready }
