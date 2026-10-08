@@ -155,16 +155,15 @@
   },
   "detail": {
     "refmod": {
-    "make": "生成卡",
-    "doing": "生成中…",
-    "ready": "卡已就绪",
-    "makeTitle": "用该定妆图抽取身份卡（角色/场景/道具各一张）",
-    "readyTitle": "已有卡，点击可重新生成（覆盖同一张）",
-    "needImage": "请先生成或上传定妆图",
-    "done": "卡已生成",
-    "failed": "抽卡失败"
-  },
-    
+      "make": "生成卡",
+      "doing": "生成中…",
+      "ready": "卡已就绪",
+      "makeTitle": "用该定妆图抽取身份卡（角色/场景/道具各一张）",
+      "readyTitle": "已有卡，点击可重新生成（覆盖同一张）",
+      "needImage": "请先生成或上传定妆图",
+      "done": "卡已生成",
+      "failed": "抽卡失败"
+    },
     "head": {
       "charCount": "{n} 角色",
       "sceneCount": "{n} 场景",
@@ -236,6 +235,28 @@
       "needEpisodeForImage": "请先在「剧集列表」创建至少一集，才能生成素材图",
       "needEpisodeForPrompt": "请先在「剧集列表」创建至少一集，才能生成最终提示词",
       "locationRequired": "请填写地点"
+    },
+    "voice": {
+      "title": "角色声音",
+      "make": "生成声音",
+      "ready": "声音已就绪",
+      "readyTitle": "已有声音卡，点击可重新生成（覆盖同一张）",
+      "makeTitle": "用底样本生成该角色的声音卡（生成视频时角色用它说话）",
+      "sex": "性别",
+      "male": "男声",
+      "female": "女声",
+      "sexHint": "男声配男底、女声配女底（跨性别无效）",
+      "base": "底样本",
+      "playBase": "试听底",
+      "desc": "描述",
+      "descHint": "情绪 / 语速 / 方言（可留空）",
+      "note": "描述只写情绪、语速、方言、音量；年龄与音色由底样本决定，写描述改不了。",
+      "preview": "出试听",
+      "doing": "生成中…",
+      "generate": "生成声音",
+      "regen": "重新生成",
+      "done": "声音卡已生成",
+      "failed": "生成失败"
     }
   },
   "settings": {

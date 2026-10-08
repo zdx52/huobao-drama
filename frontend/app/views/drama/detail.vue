@@ -242,6 +242,7 @@
                           <span>{{ t('episode.asset.styling') }}{{ m.styling || t('detail.assets.todoShort') }}</span>
                         </div>
                       </div>
+                      <div class="character-btn-row">
                       <button class="btn btn-sm character-gen-btn" type="button" :disabled="isPending(m)" @click.stop="generateMaterial(m)">
                         <span v-if="isPending(m)" class="ring-spinner sm"></span>
                         {{ matHasImage(m) ? t('episode.asset.regen') : (isPending(m) ? t('episode.asset.generating') : t('episode.asset.generate')) }}
@@ -261,6 +262,17 @@
                         <span v-if="refmodBusyOne(m)" class="ring-spinner sm"></span>
                         {{ refmodReady(m) ? '✓ ' + t('detail.refmod.ready') : (refmodBusyOne(m) ? t('detail.refmod.doing') : t('detail.refmod.make')) }}
                       </button>
+                        <button
+                          class="btn btn-sm"
+                          type="button"
+                          :disabled="voiceBusyAny(m)"
+                          :title="voiceReady(m) ? t('detail.voice.readyTitle') : t('detail.voice.makeTitle')"
+                          @click.stop="openVoiceDialog(m)"
+                        >
+                          <span v-if="voiceBusyOne(m)" class="ring-spinner sm"></span>
+                          {{ voiceReady(m) ? '✓ ' + t('detail.voice.ready') : t('detail.voice.make') }}
+                        </button>
+                      </div>
                     </div>
                   </div>
                   <div class="asset-final-prompt" :title="m.finalPrompt || ''">
@@ -351,6 +363,7 @@
       </div>
 
       <!-- 素材详情 / 编辑对话框（与工作台资产卡片同款布局） -->
+    <Teleport to="body">
       <div v-if="editDialog && editTarget" class="overlay mat-detail-overlay" @click.self="closeEdit">
         <section class="dialog mat-detail-dialog" :aria-label="t('detail.mat.dialogAria')">
           <header class="dialog-head mat-detail-head">
@@ -526,8 +539,10 @@
           </footer>
         </section>
       </div>
+    </Teleport>
 
       <!-- 图片查看器 -->
+    <Teleport to="body">
       <div v-if="assetViewer.open" class="overlay viewer-overlay" @click.self="closeAssetViewer">
         <div class="dialog viewer-dialog">
           <div class="viewer-head">
@@ -539,8 +554,57 @@
           <img :src="assetViewer.src" :alt="assetViewer.title" class="viewer-img" />
         </div>
       </div>
+    </Teleport>
     </div>
 
+    <Teleport to="body">
+
+    <!-- 角色声音面板（批次③）：选底样本 → 试听 → 生成声音卡 -->
+    <Teleport to="body">
+      <div v-if="voiceDialog.open" class="overlay voice-overlay" @click.self="closeVoiceDialog">
+        <section class="dialog voice-dialog">
+          <header class="dialog-head">
+            <div class="dialog-title">{{ t('detail.voice.title') }}{{ voiceDialog.name ? ' · ' + voiceDialog.name : '' }}</div>
+            <button class="btn btn-icon btn-sm btn-ghost" type="button" @click="closeVoiceDialog">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+            </button>
+          </header>
+          <div class="voice-body">
+            <div class="voice-row">
+              <span class="voice-label">{{ t('detail.voice.sex') }}</span>
+              <div class="voice-sex">
+                <button :class="['btn','btn-sm', voiceDialog.sex === 'male' && 'btn-primary']" type="button" @click="setVoiceSex('male')">{{ t('detail.voice.male') }}</button>
+                <button :class="['btn','btn-sm', voiceDialog.sex === 'female' && 'btn-primary']" type="button" @click="setVoiceSex('female')">{{ t('detail.voice.female') }}</button>
+              </div>
+              <span class="voice-hint">{{ t('detail.voice.sexHint') }}</span>
+            </div>
+            <div class="voice-row">
+              <span class="voice-label">{{ t('detail.voice.base') }}</span>
+              <select v-model="voiceDialog.base" class="voice-select">
+                <option v-for="b in voiceBaseOptions" :key="b.id" :value="b.id">{{ b.label }}</option>
+              </select>
+              <button class="btn btn-sm" type="button" :disabled="!voiceDialog.base" @click="playBase(voiceDialog.base)">{{ t('detail.voice.playBase') }}</button>
+            </div>
+            <div class="voice-row">
+              <span class="voice-label">{{ t('detail.voice.desc') }}</span>
+              <input v-model="voiceDialog.desc" class="voice-input" :placeholder="t('detail.voice.descHint')" maxlength="60" />
+            </div>
+            <p class="voice-note">{{ t('detail.voice.note') }}</p>
+            <div class="voice-actions">
+              <button class="btn btn-sm" type="button" :disabled="voiceDialog.busy" @click="doVoicePreview">
+                <span v-if="voiceDialog.busy" class="ring-spinner sm"></span>
+                {{ voiceDialog.busy ? t('detail.voice.doing') : t('detail.voice.preview') }}
+              </button>
+              <button class="btn btn-sm btn-primary" type="button" :disabled="voiceDialog.busy || !voiceDialog.base" @click="doVoiceGenerate">
+                {{ voiceDialog.hasCard ? t('detail.voice.regen') : t('detail.voice.generate') }}
+              </button>
+            </div>
+            <audio v-if="voiceDialog.audioUrl" :src="voiceDialog.audioUrl" controls class="voice-player" />
+            <p v-if="voiceDialog.msg" class="voice-msg">{{ voiceDialog.msg }}</p>
+          </div>
+        </section>
+      </div>
+    </Teleport>
     <div v-if="addDialog" class="overlay" @click.self="addDialog = false">
       <div class="dialog ep-dialog">
         <div class="dialog-head">
@@ -570,6 +634,7 @@
         </div>
       </div>
     </div>
+    </Teleport>
     <ConfirmDialog
       :open="!!episodeToDelete"
       :title="t('detail.ep.deleteTitle')"
@@ -585,7 +650,7 @@
 import { toast } from 'vue-sonner'
 import { toastError } from '~/composables/useToast'
 import { useI18n } from 'vue-i18n'
-import { dramaAPI, episodeAPI, characterAPI, sceneAPI, propAPI, uploadAPI, refmodAPI } from '~/composables/useApi'
+import { dramaAPI, episodeAPI, characterAPI, sceneAPI, propAPI, uploadAPI, refmodAPI, voiceAPI } from '~/composables/useApi'
 import BaseSelect from '~/components/BaseSelect.vue'
 
 const { t, locale } = useI18n()
@@ -799,6 +864,74 @@ async function makeRefmodCard(m) {
   }
 }
 
+// ── 角色声音（2026-10-08 批次③）：底样本试听 + 生成/重抽声音卡 ──
+// 底库按性别过滤（角色表无性别字段 → 用名字/角色/外貌文本猜一个默认值，用户可改）
+// desc 只写白名单维度（情绪/语速/方言/音量），不写年龄性别——那是分布外输入
+const voiceBases = ref([])
+const voiceCards = ref({})
+const voiceBusy = ref({})
+const voiceDialog = ref<any>({ open: false, id: 0, name: '', sex: 'male', base: '', desc: '', busy: false, audioUrl: '', msg: '', hasCard: false })
+function voiceBusyOne(m) { return !!voiceBusy.value[m.id] }
+function voiceBusyAny(m) { return voiceBusyOne(m) || isPending(m) }
+function voiceReady(m) { return !!voiceCards.value[String(m.id)]?.ready }
+const voiceBaseOptions = computed(() => voiceBases.value.filter(b => (b.sex || '') === voiceDialog.value.sex))
+async function loadVoiceBases() {
+  try { const r = await voiceAPI.bases(); voiceBases.value = r?.bases || [] } catch { /* 底库拉不到不打扰 */ }
+}
+async function loadVoiceStatus() {
+  const ids = materials.value.filter((m) => m.kindKey === 'character').map((m) => m.id)
+  if (!ids.length) return
+  try { voiceCards.value = (await voiceAPI.status(ids)) || {} } catch { /* 同上 */ }
+}
+function guessVoiceSex(m) {
+  const s = `${m?.name || ''}${m?.role || ''}${m?.appearance || ''}`
+  return /女|妈|姐|妹|婆|姨|嫂|妮|娥|娘|妇/.test(s) ? 'female' : 'male'
+}
+function openVoiceDialog(m) {
+  if (!voiceBases.value.length) loadVoiceBases()
+  const sex = guessVoiceSex(m)
+  const opts = voiceBases.value.filter(b => b.sex === sex)
+  voiceDialog.value = { open: true, id: m.id, name: m.name || '', sex, base: opts[0]?.id || '', desc: '', busy: false, audioUrl: '', msg: '', hasCard: voiceReady(m) }
+}
+function closeVoiceDialog() { voiceDialog.value.open = false }
+function setVoiceSex(sex) {
+  voiceDialog.value.sex = sex
+  const opts = voiceBases.value.filter(b => b.sex === sex)
+  if (!opts.some(b => b.id === voiceDialog.value.base)) voiceDialog.value.base = opts[0]?.id || ''
+}
+function playBase(id) { if (id) voiceDialog.value.audioUrl = `/api/v1/voice/bases/${encodeURIComponent(id)}/audio` }
+async function doVoicePreview() {
+  const d = voiceDialog.value
+  if (!d.base || d.busy) return
+  d.busy = true; d.msg = ''
+  try {
+    const resp = await fetch('/api/v1/voice/preview', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ base: d.base, desc: d.desc }),
+    })
+    if (!resp.ok) throw new Error(String(resp.status))
+    d.audioUrl = URL.createObjectURL(await resp.blob())
+  } catch (e) {
+    d.msg = t('detail.voice.failed')
+  } finally { d.busy = false }
+}
+async function doVoiceGenerate() {
+  const d = voiceDialog.value
+  if (!d.base || d.busy) return
+  d.busy = true; d.msg = t('detail.voice.doing')
+  voiceBusy.value = { ...voiceBusy.value, [d.id]: true }
+  try {
+    await voiceAPI.generate({ id: d.id, base: d.base, desc: d.desc })
+    d.msg = t('detail.voice.done'); d.hasCard = true
+    await loadVoiceStatus()
+  } catch (e) {
+    d.msg = e?.message || t('detail.voice.failed')
+  } finally {
+    d.busy = false
+    const n = { ...voiceBusy.value }; delete n[d.id]; voiceBusy.value = n
+  }
+}
+
 function isPending(m) { return pendingMaterials.value.has(pendingKey(m)) }
 
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)) }
@@ -966,7 +1099,7 @@ async function saveEdit() {
   }
 }
 
-onMounted(async () => { await load(); await loadRefmodStatus() })
+onMounted(async () => { await load(); await loadRefmodStatus(); await loadVoiceBases(); await loadVoiceStatus() })
 </script>
 
 <style scoped>
@@ -1340,10 +1473,17 @@ onMounted(async () => { await load(); await loadRefmodStatus() })
 }
 .character-asset-head {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
   min-width: 0;
+}
+/* 按钮行独立成行并允许换行：按钮 ≥4 个时不换行会挤掉标题/遮住信息（2026-10-08 修） */
+.character-btn-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
 }
 .character-title-block {
   min-width: 0;
@@ -1471,7 +1611,7 @@ onMounted(async () => { await load(); await loadRefmodStatus() })
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.asset-foot { display: flex; align-items: center; gap: 4px; padding: 7px 11px; border-top: 1px solid var(--border); }
+.asset-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; padding: 7px 11px; border-top: 1px solid var(--border); }
 .prop-name-row {
   display: flex;
   align-items: center;
@@ -1667,6 +1807,24 @@ onMounted(async () => { await load(); await loadRefmodStatus() })
 }
 .mat-detail-secondary-actions,
 .mat-detail-primary-actions { display: flex; align-items: center; gap: 8px; }
+
+/* ── 角色声音面板（批次③，2026-10-08）── */
+.voice-overlay { align-items: center; }
+.voice-dialog { width: min(560px, 92vw); }
+.voice-body { display: flex; flex-direction: column; gap: 10px; padding: 14px 16px 16px; }
+.voice-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.voice-label { width: 56px; flex: 0 0 auto; color: var(--text-3); font-size: 12px; }
+.voice-sex { display: flex; gap: 4px; }
+.voice-hint { color: var(--text-3); font-size: 11px; }
+.voice-select, .voice-input {
+  flex: 1 1 180px; min-width: 0; padding: 6px 9px;
+  border: 1px solid var(--border); border-radius: 6px;
+  background: var(--surface-1, transparent); color: var(--text-1); font-size: 13px;
+}
+.voice-note { margin: 0; color: var(--text-3); font-size: 11px; line-height: 1.5; }
+.voice-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.voice-player { width: 100%; height: 36px; }
+.voice-msg { margin: 0; color: var(--text-2); font-size: 12px; }
 
 @media (max-width: 860px) {
   .page { padding: 16px 16px 32px; }

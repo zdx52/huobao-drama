@@ -97,6 +97,14 @@ export const refmodAPI = {
   del: (kind: string, id: number) => api.del(`/refmod?kind=${encodeURIComponent(kind)}&id=${id}`),
 }
 
+// 角色声音（2026-10-08 批次③）：底样本清单/试听 + 生成声音卡
+export const voiceAPI = {
+  bases: () => api.get<{ line: string; bases: any[] }>('/voice/bases'),
+  status: (ids: number[]) => api.get(`/voice/status?ids=${encodeURIComponent(ids.join(','))}`),
+  generate: (data: { id: number; base: string; desc?: string; force?: boolean }) => api.post('/voice/generate', data),
+  del: (id: number) => api.del(`/voice?id=${id}`),
+}
+
 // 统一生成任务（图片/视频）：POST 带 type 字段，列表按 type 过滤
 export const taskAPI = {
   generate: (d: any) => api.post('/tasks', d),

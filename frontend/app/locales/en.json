@@ -155,16 +155,15 @@
   },
   "detail": {
     "refmod": {
-    "make": "ID card",
-    "doing": "Making…",
-    "ready": "Card ready",
-    "makeTitle": "Extract an identity card from this shot (one per asset)",
-    "readyTitle": "Card exists — click to regenerate (overwrites)",
-    "needImage": "Generate or upload the shot first",
-    "done": "Card created",
-    "failed": "Card extraction failed"
-  },
-    
+      "make": "ID card",
+      "doing": "Making…",
+      "ready": "Card ready",
+      "makeTitle": "Extract an identity card from this shot (one per asset)",
+      "readyTitle": "Card exists — click to regenerate (overwrites)",
+      "needImage": "Generate or upload the shot first",
+      "done": "Card created",
+      "failed": "Card extraction failed"
+    },
     "head": {
       "charCount": "{n} characters",
       "sceneCount": "{n} scenes",
@@ -236,6 +235,28 @@
       "needEpisodeForImage": "Create at least one episode in “Episodes” before generating asset images",
       "needEpisodeForPrompt": "Create at least one episode in “Episodes” before generating the final prompt",
       "locationRequired": "Please enter a location"
+    },
+    "voice": {
+      "title": "Character voice",
+      "make": "Make voice",
+      "ready": "Voice ready",
+      "readyTitle": "Voice card exists — click to regenerate (overwrites)",
+      "makeTitle": "Build this character's voice card from a base sample",
+      "sex": "Sex",
+      "male": "Male",
+      "female": "Female",
+      "sexHint": "Male voice ← male base, female voice ← female base (cross-sex has no effect)",
+      "base": "Base sample",
+      "playBase": "Play base",
+      "desc": "Description",
+      "descHint": "emotion / speed / dialect (optional)",
+      "note": "Describe only emotion, speed, dialect or volume. Age and timbre come from the base sample — text can't change them.",
+      "preview": "Preview",
+      "doing": "Working…",
+      "generate": "Generate voice",
+      "regen": "Regenerate",
+      "done": "Voice card generated",
+      "failed": "Generation failed"
     }
   },
   "settings": {
