@@ -44,7 +44,7 @@ Organize each segment's content in this order (items with no content may be omit
 - **Shot size/camera move**: one camera state per segment (close shot / medium shot / wide shot / close-up; static / push / pull / pan / tracking); the camera move is continuous within a single sub-shot and may change after a cut
 - **Action**: one main action per segment, with concrete visible verbs (walk, turn around, look up, clench, pause)
 - **All emotion must become visible description**: no abstract words like "he is very sad / the mood is tense" — write it as "he lowers his head, fingers clench the rim of the cup, breathing grows heavier"
-- **Dialogue/narration**: write "CharacterName says: "line""; narration as "Narration: content"; a long line that cannot be spoken within 3 seconds is split across multiple segments; a segment without dialogue may note ambient/action sounds (e.g. "machines keep roaring")
+- **Dialogue/narration**: write "CharacterName says: "line""; narration as "Narration: content"; a long line that cannot be spoken within 3 seconds is split across multiple segments; a segment without dialogue must still spell out "**no human voice in this segment, only … ambience**" (noting "machines keep roaring" alone is not enough — the model assumes you forgot the voices and invents speech)
 
 ## Reference Rules
 
@@ -88,6 +88,25 @@ What the body must NOT contain:
 - **Carry the full surface text**: title + 2–4 body lines + signature (name/date) + seal (text inside the stamp) — each a separate group, **spelled out verbatim**, ≤6 Chinese characters per group (e.g. `the sheet reads "报到证" in large vertical type; three body lines reading "林巧", "红星机械厂", "二车间钳工"; signed "三月十七日" at the lower right`) — a sheet of paper is large; a lone title looks bare, and omitting the content guarantees garbled glyphs
 - **The back must be a blank sheet**: state "the paper is opaque; the back is blank, showing no bleed-through of the front's text, table lines or seal" — especially when the paper is turned, flipped, shown from the back, or held to the light. Otherwise the model shows the front's text through the paper (measured artifact: the registration form's content was visible from the back)
 - Never write "the paper is thin / translucent / shows through"
+
+## Pre-submit self-check: three items, beat by beat (hard)
+
+After writing the body, **walk through it one beat (one time range) at a time** — not once for the whole segment:
+
+- [ ] **Every beat carries an audio declaration**: either dialogue/narration (`Narration: …` / `X says: "…"`), or the explicit line "no human voice in this segment, only … ambience". **A beat with neither = the model improvises**
+- [ ] **No dialogue/narration within the first 2s or the last 2s**; for segment 2 of a chain, **beat 1 is the hold only** (carry the previous framing + a breath/weight-shift/eyeline micro-motion), dialogue starts at beat 2
+- [ ] **Total spoken characters ≤ (segment seconds − 4) × 4.5** (≤27 for a 10s segment, ≤25 recommended)
+
+**Measured failure (do not repeat)**:
+
+```
+0-3s: …hand close-up… Narration: "these hands came back with me."
+3-6s: …no human voice in this segment, only distant wind and workshop hum…
+6-9s: cut to a medium shot, …clenches a fist…   ← no audio declaration at all → the model improvised speech here (bleeding into the next beat)
+9-10s: …no human voice in this segment, only footsteps…
+```
+
+**Fix**: move the narration out of the first 2s (0-2s = picture + "no human voice…", narration at 2-5s) and give 6-9s its own declaration ("no human voice in this segment, only the knuckle crack and distant workshop hum") — **every beat declares**.
 
 ## Chain Carry-Over (never hand-written; the runner adds it)
 
