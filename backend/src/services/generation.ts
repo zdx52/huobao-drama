@@ -12,6 +12,7 @@ import fs from 'fs'
 import path from 'path'
 import { extractVideoPoster } from '../utils/video-poster.js'
 import { getImageAdapter, getVideoAdapter } from './adapters/registry'
+import { voiceCardsForCharacters } from './voice.js' // 2026-10-08 声音卡下发
 import type { AIConfig } from './adapters/types'
 import { logTaskError, logTaskPayload, logTaskProgress, logTaskStart, logTaskSuccess, logTaskWarn, redactUrl } from '../utils/task-logger.js'
 
@@ -442,6 +443,13 @@ async function processTask(id: number, config: AIConfig) {
       const resolvedReferenceImageUrls = await normalizeVideoReferenceUrls(params.referenceImageUrls)
       // RefMod 卡：按参考图同序读 Mac 主副本（缺卡 / 数量不符 → 抛错中止，绝不静默降级）
       const refmodFiles = await buildRefmodFiles(params.referenceAssetKeys, resolvedReferenceImageUrls.length)
+      // 2026-10-08 声音卡：本段绑定的角色里「做过声音」的那些，排在图片卡之后同序下发
+      //   中转按 voice- 前缀识别 → 只贡献 Audio 分量 + 骨架补 <Audio j> → <Subject K>
+      const voiceCharacterIds = (params.referenceAssetKeys || [])
+        .map((k) => /^character-(\d+)$/.exec(String(k || '')))
+        .filter((m): m is RegExpExecArray => !!m)
+        .map((m) => Number(m[1]))
+      const voiceFiles = await voiceCardsForCharacters(voiceCharacterIds)
       // 参考视频/音频文件较大，不适合 dataURL 内联，需解析为公网可访问 URL
       const resolvedReferenceVideoUrls = resolvePublicMediaUrls(params.referenceVideoUrls, 'video')
       const resolvedReferenceAudioUrls = resolvePublicMediaUrls(params.referenceAudioUrls, 'audio')
@@ -455,7 +463,8 @@ async function processTask(id: number, config: AIConfig) {
         firstFrameUrl: resolvedFirstFrameUrl,
         lastFrameUrl: resolvedLastFrameUrl,
         referenceImageUrls: resolvedReferenceImageUrls.length ? JSON.stringify(resolvedReferenceImageUrls) : null,
-        refmodFiles: refmodFiles.length ? refmodFiles : null,
+        refmodFiles:
+          refmodFiles.length || voiceFiles.length ? [...refmodFiles, ...voiceFiles] : null,
         referenceVideoUrls: resolvedReferenceVideoUrls.length ? JSON.stringify(resolvedReferenceVideoUrls) : null,
         referenceAudioUrls: resolvedReferenceAudioUrls.length ? JSON.stringify(resolvedReferenceAudioUrls) : null,
         referenceFileUrl: resolvedReferenceFileUrl,

@@ -24,6 +24,7 @@ import settings from './routes/settings.js'
 import storage from './routes/storage.js'
 import serverUpdate from './routes/serverUpdate.js'
 import refmod from './routes/refmod.js'
+import voice from './routes/voice.js'
 import { requestLogger, errorHandler } from './middleware/logger.js'
 import { db, schema } from './db/index.js'
 import { eq } from 'drizzle-orm'
@@ -71,6 +72,7 @@ api.route('/storage', storage)
 api.route('/settings', settings)
 api.route('/server-update', serverUpdate)
 api.route('/refmod', refmod)
+api.route('/voice', voice) // 2026-10-08 角色声音（语音卡）
 
 app.route('/api/v1', api)
 

@@ -7,6 +7,7 @@ import { generateImage } from '../services/generation.js'
 import { getDramaStylePrompt } from '../services/style-preset.js'
 import { ensureCharacterFinalPrompt } from '../services/final-prompt.js'
 import { removeRefmod } from '../services/refmod.js'
+import { removeVoice } from '../services/voice.js'
 import { logTaskError, logTaskStart, logTaskSuccess } from '../utils/task-logger.js'
 
 const app = new Hono()
@@ -76,6 +77,7 @@ app.delete('/:id', async (c) => {
   const id = Number(c.req.param('id'))
   await db.update(schema.characters).set({ deletedAt: now() }).where(eq(schema.characters.id, id))
   removeRefmod('character', id) // 2026-10-08 删角色连带清卡（Mac 主副本）
+  removeVoice(id) // 2026-10-08 删角色连带清声音（卡+wav+参数）
   return success(c)
 })
 

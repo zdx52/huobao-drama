@@ -4,6 +4,7 @@ import { db, getInsertId, schema } from '../db/index.js'
 import { success, badRequest, notFound, created, now } from '../utils/response.js'
 import { toSnakeCase, toSnakeCaseArray } from '../utils/transform.js'
 import { removeRefmod } from '../services/refmod.js'
+import { removeVoice } from '../services/voice.js'
 
 const app = new Hono()
 
@@ -135,7 +136,10 @@ app.delete('/:id', async (c) => {
   const chars = await db.select({ id: schema.characters.id }).from(schema.characters).where(eq(schema.characters.dramaId, id))
   const scns = await db.select({ id: schema.scenes.id }).from(schema.scenes).where(eq(schema.scenes.dramaId, id))
   const prps = await db.select({ id: schema.props.id }).from(schema.props).where(eq(schema.props.dramaId, id))
-  for (const r of chars) removeRefmod('character', r.id)
+  for (const r of chars) {
+    removeRefmod('character', r.id)
+    removeVoice(r.id) // 2026-10-08 删项目连带清声音
+  }
   for (const r of scns) removeRefmod('scene', r.id)
   for (const r of prps) removeRefmod('prop', r.id)
   await db.update(schema.dramas).set({ deletedAt: now() }).where(eq(schema.dramas.id, id))
