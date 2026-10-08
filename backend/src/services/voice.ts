@@ -118,12 +118,28 @@ async function shimBase(): Promise<string> {
   return base
 }
 
-/** 调 4080 TTS，返回 wav 字节 */
-async function callTts(base: string, desc: string, text: string): Promise<Buffer> {
-  const resp = await fetch(`${base}/v2/tts/voice`, {
+/**
+ * 调 4080 TTS，返回 { wav, seconds }。
+ *
+ * ⚠️ 2026-10-08 修的坑：原来把 `base` 字段塞成中转网址（`{base: shimUrl}`），
+ * 而 4080 的 `base` 是「底样本文件名」语义 → 匹配不到 → **静默回落到 CosyVoice 自带女声底**，
+ * 用户选的底一次也没生效（男角色拿到女声底）。现在改为**上传底样本本体**（base_wav, base64），
+ * 不依赖 4080 本地目录里是否有同 id 的文件；底不存在才退回按 id 找。
+ */
+async function callTts(
+  shimUrl: string,
+  baseId: string,
+  desc: string,
+  text: string,
+): Promise<{ wav: Buffer; seconds: number | null }> {
+  const payload: Record<string, unknown> = { desc, text }
+  const p = voiceBaseWavPath(baseId)
+  if (p) payload.base_wav = fs.readFileSync(p).toString('base64')
+  else if (baseId) payload.base = baseId
+  const resp = await fetch(`${shimUrl}/v2/tts/voice`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ base: base, desc, text }),
+    body: JSON.stringify(payload),
     signal: AbortSignal.timeout(900_000),
   })
   if (!resp.ok) {
@@ -134,14 +150,16 @@ async function callTts(base: string, desc: string, text: string): Promise<Buffer
   if (!b64) throw new Error('TTS 返回为空')
   const wav = Buffer.from(b64, 'base64')
   if (wav.length < 4096) throw new Error(`TTS 结果异常（只有 ${wav.length} 字节）`)
-  return wav
+  const seconds = Number(out?.seconds)
+  return { wav, seconds: Number.isFinite(seconds) && seconds > 0 ? seconds : null }
 }
 
 /** 只试听：底样本 + 描述 → wav（不落卡、不落盘） */
 export async function previewVoice(baseId: string, desc: string): Promise<Buffer> {
-  const base = await shimBase()
+  const shimUrl = await shimBase()
   const text = listVoiceBases().line || VOICE_DEFAULT_TEXT
-  return callTts(base, desc || '', text)
+  const { wav } = await callTts(shimUrl, String(baseId || '').trim(), desc || '', text)
+  return wav
 }
 
 /** 生成声音卡：TTS → 落 wav/参数 → 抽卡 → 落卡。force=true 强制重抽 */
@@ -155,10 +173,11 @@ export async function extractVoiceCard(
   const existing = pending.get(name)
   if (existing && !force) return existing // ① 同名在抽 → 复用同一结果（连点不重复起进程）
   const task = (async () => {
-    const base = await shimBase()
+    const shimUrl = await shimBase()
     const text = listVoiceBases().line || VOICE_DEFAULT_TEXT
     const cleanDesc = String(desc || '').trim()
     const cleanBase = String(baseId || '').trim()
+    if (!cleanBase) throw new Error('缺底样本（base）——先在面板里选一个底')
 
     // ② 内容指纹：底样本+描述+文本都没变且卡在 → 直接复用，不重抽
     if (!force) {
@@ -179,19 +198,19 @@ export async function extractVoiceCard(
       }
     }
 
-    const wav = await callTts(base, cleanDesc, text)
+    const { wav, seconds } = await callTts(shimUrl, cleanBase, cleanDesc, text)
     fs.mkdirSync(voicesDir(), { recursive: true })
     fs.writeFileSync(voiceWavPath(name), wav)
     fs.writeFileSync(
       voiceMetaPath(name),
       JSON.stringify(
-        { base: cleanBase, desc: cleanDesc, text, seconds: null, updated_at: new Date().toISOString() },
+        { base: cleanBase, desc: cleanDesc, text, seconds, updated_at: new Date().toISOString() },
         null,
         1,
       ),
     )
 
-    const resp = await fetch(`${base}/v2/refmod/extract_voice`, {
+    const resp = await fetch(`${shimUrl}/v2/refmod/extract_voice`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
