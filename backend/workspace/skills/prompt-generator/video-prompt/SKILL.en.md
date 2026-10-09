@@ -90,8 +90,9 @@ What the body must NOT contain:
 
 ## Paper / certificate props (when they appear in the video)
 
-- **Carry the full surface text**: title + 2–4 body lines + signature (name/date) + seal (text inside the stamp) — each a separate group, **spelled out verbatim**, ≤6 Chinese characters per group (e.g. `the sheet reads "报到证" in large vertical type; three body lines reading "林巧", "红星机械厂", "二车间钳工"; signed "三月十七日" at the lower right`) — a sheet of paper is large; a lone title looks bare, and omitting the content guarantees garbled glyphs
-- **The back must be a blank sheet**: state "the paper is opaque; the back is blank, showing no bleed-through of the front's text, table lines or seal" — especially when the paper is turned, flipped, shown from the back, or held to the light. Otherwise the model shows the front's text through the paper (measured artifact: the registration form's content was visible from the back)
+- **🔴 Never write the paper's text content** (decided 2026-10-09, supersedes the old rule "carry the full surface text"): whatever is printed on the prop is **decided entirely by the reference image** — the prop's `final_prompt` is the finalized image-generation prompt, so the text on the reference is already final. Repeating it in the video prompt always contradicts the reference, and measured wrong every time: 2026-10-09, the registration form's `final_prompt` says `单位：红星机械厂二车间` and `1979年3月17日` across **2 body lines**, while the prompt wrote `第二车间` and `三月十七日` plus a nonexistent extra line `钳工学徒` (**3 lines**).
+- **Correct way**: state only the carrier and the action, **never the content** — `her gaze down on the form`, `the printed side turned toward her and away from the lens`, `the printed side of the single form` (mention "the printed side" only, **never what is printed on it**). The old example `the sheet reads "报到证" in large vertical type; three body lines reading "林巧", "红星机械厂", "二车间钳工"` **is VOID — never write it again**.
+- **The back must be a blank sheet** (this line stays — it is not text content, it is anti-artifact): state "the paper is opaque; the back is a blank paper back, showing no bleed-through of the front's text, table lines or seal" — especially when the paper is turned, flipped, shown from the back, or held to the light. Otherwise the model shows the front's text through the paper (measured artifact: the registration form's content was visible from the back)
 - Never write "the paper is thin / translucent / shows through"
 
 ## Pre-submit self-check: three items, beat by beat (hard)
@@ -147,6 +148,24 @@ Call `update_storyboard` to update only this storyboard segment's `video_prompt`
 
 `video_prompt_en` is **the version actually sent to the video model**. Its rules come from the official MiniMax H3 prompt-writing guide (Ref2VA full-reference rewrite output format). **Everything is English except dialogue, lyrics, and text visible in frame.**
 
+**🔴 Length budget (hard, established 2026-10-09): the whole `video_prompt_en` must be ≤ 6200 characters** (run `len()` over it before saving).
+The MiniMax H3 prompt limit is **7000 characters — an official hard limit that cannot be relaxed** (RunDiffusion / AtlasCloud / MiniMax official GitHub all state this), and the backend prepends a photorealistic style header before sending, so headroom is mandatory.
+**Going over means the request is rejected outright and no video is produced** (measured 2026-10-09: sb147 reached 7608 characters → 8403 after concatenation → error "prompt too long: MiniMax H3 limit 7000 characters, current 8403").
+
+Per-section quotas (allocate to these; count each section when done):
+- `CAST:` ≤ 220
+- `BLOCKING:` ≤ 420
+- `subject_definitions` ≤ 1850 (holds even for multi-character segments)
+- `summary` ≤ 380 (the official only asks for one short English paragraph)
+- `retention_analysis` ≤ 820
+- `detailed_description` ≤ 2050 (official 350–500 words; take the low end)
+- `overall_soundscape` ≤ 330
+- `non_diegetic_music` ≤ 50
+- newlines and punctuation ≈ 80 → **total ≤ 6200**
+
+**When over budget, cut in this order**: ① redundant clauses in `summary` ② `soundscape` effects already stated in the body ③ description in `BLOCKING` that duplicates the body ④ appearance modifiers in `subject_definitions`.
+**Never cut**: `<d>` dialogue, any `fully_preserved` line in `retention_analysis`, `<Picture N>` and the `with` clause, the count lock in `CAST`, the orientation and 180-axis in `BLOCKING`.
+
 Six section names, fixed order:
 
 ```
@@ -164,6 +183,12 @@ non_diegetic_music:
    - **The scene also needs its own `<Subject N>`**: `<Subject 1> is the scene in <Picture 1>, with ...`. Omitting the scene means it takes neither card nor reference image
    - After `with`, **name the visible appearance item by item**: face shape / hairstyle (length + colour) / garment style and colour / accessories / notable wear. **Source it from the asset's `appearance`/`styling`/`description`/`prompt`/`location` fields rewritten into English — never omit, never invent**
    - **An image that only defines a subject and never acts as a frame anchor gets no standalone `<Picture N>` line** — cite it inside the `<Subject N>` definition (official: *If an image is used only to define a character, scene, costume, or style, do not create a standalone picture entry.*)
+   - **🔴 When the reference is a MULTI-VIEW SHEET, the `<Subject N>` definition must name the views (established 2026-10-09)**:
+     - **How to tell**: look **only at the asset's `final_prompt` / `prompt` (the finalized image prompt)** — if it says the image is a multi-view sheet (`三联参考板` / `三视图板` / `四格板` / `character sheet` / `multiple views` / `shown from N angles`). **Deliberately NOT `description`** — that field is the item's physical appearance and must never carry layout/panel information (measured 2026-10-09: writing "left large panel / top-right panel" into `description` polluted the appearance field and had to be rolled back). **If it does not say so, treat it as a single view — never guess.**
+     - **Why it is mandatory**: when the sheet shows **both front and back**, not saying so makes the model treat them as **several different things** → the prop duplicates into two sheets (one measured root cause, 2026-10-09).
+     - **How to write it (prop three-view sheet)**: `<Subject 3> is the registration form shown from three angles in <Picture 3>: a top-down view of its printed front, a three-quarter view of the same sheet, and its blank back — one single sheet seen three ways, not two or three separate forms.`
+     - **A character's four-panel sheet may stay unwritten** (the model already reads front/side/back of a person), but **props — and anything with a front and a back — must be written out**.
+     - **`retention_analysis` in sync**: append `stays identical from every angle shown in <Picture 3>; one single sheet, never duplicated.`
    - **Write `cloth shoes`, never `liberation shoes`** — the literal translation renders as odd boots
    - **A prop needs at least one "clear full-view" shot, but get it through the CAMERA ANGLE, never by having the character hold it up (final wording after three rounds of measurement, 2026-10-09)**:
      - **Why it is needed**: if a `<Subject N>` is only ever "clutched in hand / folded away / tucked into a pocket", there is nothing in frame to lock and the model invents it → the prop is always lost.
@@ -218,4 +243,4 @@ non_diegetic_music:
 5. **`overall_soundscape`** — ambience (English); shots without dialogue state no human voice: `(No human voice in this segment except the dialogue lines explicitly written below; no narration, no humming, no singing.)`
 6. **`non_diegetic_music`** — score audible only to the audience; `N/A` when absent
 
-**Self-check before saving**: `CAST:` and `BLOCKING:` both present **before `subject_definitions`** (top of the whole prompt) and complete / official six section names present and in order / every `subject_definitions` line has `<Picture N>` plus a `with` clause / `retention_analysis` contains no `(Sx)` / all dialogue copied **as whole sentences** verbatim from the description (no truncation, no rewording; dropped sentences marked) / narrator designated as one of the on-screen characters and the voice card written as `<Subject N>'s off-screen narration` / lip lock sitting immediately next to the `<d>` line (not separated by action) / `Same exposure...` appears once in the style sentence only (not repeated per shot) / body is English except `<d>` and on-screen text
+**Self-check before saving**: `CAST:` and `BLOCKING:` both present **before `subject_definitions`** (top of the whole prompt) and complete / official six section names present and in order / **prop surface text content absent** (only `the printed side` / carrier + action phrasing appears — **no** quoted paper text anywhere) / every `subject_definitions` line has `<Picture N>` plus a `with` clause / `retention_analysis` contains no `(Sx)` / all dialogue copied **as whole sentences** verbatim from the description (no truncation, no rewording; dropped sentences marked) / narrator designated as one of the on-screen characters and the voice card written as `<Subject N>'s off-screen narration` / lip lock sitting immediately next to the `<d>` line (not separated by action) / `Same exposure...` appears once in the style sentence only (not repeated per shot) / body is English except `<d>` and on-screen text

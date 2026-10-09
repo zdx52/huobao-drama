@@ -93,8 +93,9 @@ description: 视频提示词规范 — 根据分镜段落内容生成按时间�
 
 ## 纸张/证件类道具（视频里出现时）
 
-- **纸面文字要带全**：标题 + 正文 2~4 行 + 落款（人名/日期）+ 印章（章内的字），各成一组、**逐字写死**，每组中文 ≤6 字（如 `纸面竖排写着"报到证"三个大字；正文三行分别写着"林巧""红星机械厂""二车间钳工"；右下角落款"三月十七日"`）——纸面很大，只写一个标题太空洞，不写内容必然乱码
-- **背面必须是空白纸背**：写明「纸张不透光，背面是空白纸背，不透出正面任何字迹、表格线与印章」；纸张翻面、转动、背面朝镜头或被举向光时尤其要写——否则模型会把正面字迹透到背面（实测穿帮：报到单从背面也能看到内容）
+- **🔴 纸面文字内容一律不写**（2026-10-09 定，取代旧规则「纸面文字要带全」）：道具上具体印了什么字，**完全由参考图决定**——道具的 `final_prompt` 是生图定稿，参考图上的字已经是定的；提示词再写一遍必然与参考图打架，而且实测必错：2026-10-09 报到单，`final_prompt` 写「单位：红星机械厂二车间」「1979年3月17日」且只有 2 行正文，提示词却写成「第二车间」「三月十七日」、还凭空多出一行「钳工学徒」（写成 3 行）。
+- **正确写法**：只写载体与动作、**不写内容**——`her gaze down on the form`、`the printed side turned toward her and away from the lens`、`the printed side of the single form`（只提"印刷面"，**绝不提印了什么字**）。旧例 `纸面竖排写着"报到证"三个大字；正文三行分别写着"林巧""红星机械厂""二车间钳工"` **已作废，禁止再写**。
+- **背面必须是空白纸背**（这条保留——它不是文字内容，是防穿帮）：写明「纸张不透光，背面是空白纸背，不透出正面任何字迹、表格线与印章」；纸张翻面、转动、背面朝镜头或被举向光时尤其要写——否则模型会把正面字迹透到背面（实测穿帮：报到单从背面也能看到内容）
 - 禁写「纸张很薄／半透明／能透出」
 
 ## 提交前自检：逐拍过这三条（硬性，任一不过就改到过）
@@ -149,6 +150,24 @@ description: 视频提示词规范 — 根据分镜段落内容生成按时间�
 
 `video_prompt_en` 是**真正发给视频模型的那一份**，规则来源 = MiniMax 官方 H3 提示词写作指南（Ref2VA 全参考模式改写输出格式）。**除对话、歌词与画面内可见文字外全部英文。**
 
+**🔴 长度预算（硬性，2026-10-09 立）：`video_prompt_en` 全文 ≤ 6200 字符**（写完用 `len()` 数一遍再保存）。
+MiniMax H3 的 prompt 上限是 **7000 字符，官方 hard limit、不可放宽**（RunDiffusion / AtlasCloud / MiniMax 官方 GitHub 口径一致），后端发送时还会在前面拼一段 photorealistic 风格头，必须留余量。
+**超限直接被拒、整段生成不出来**（2026-10-09 实测：sb147 写到 7608 字符 → 拼接后 8403 → 报「提示词超长：MiniMax H3 上限 7000 字符，当前 8403」）。
+
+各段配额（按此分配，写完逐段数）：
+- `CAST:` ≤ 220
+- `BLOCKING:` ≤ 420
+- `subject_definitions` ≤ 1850（多角色段也别超）
+- `summary` ≤ 380（官方只要求 one short English paragraph）
+- `retention_analysis` ≤ 820
+- `detailed_description` ≤ 2050（官方 350–500 词，取下限附近）
+- `overall_soundscape` ≤ 330
+- `non_diegetic_music` ≤ 50
+- 换行与标点余量 ≈ 80 → **合计 ≤ 6200**
+
+**超了就砍，顺序**：① `summary` 冗余从句 ② `soundscape` 与正文重复的音效 ③ `BLOCKING` 中与正文重复的描述 ④ `subject_definitions` 的外观修饰词。
+**绝不许砍**：`<d>` 台词、`retention_analysis` 每条 `fully_preserved`、`<Picture N>` 与 `with` 外观、`CAST` 数量锁、`BLOCKING` 朝向与 180 度轴线。
+
 六个段名固定、顺序固定：
 
 ```
@@ -166,6 +185,12 @@ non_diegetic_music:
    - **场景也必须有 `<Subject N>`**：`<Subject 1> is the scene in <Picture 1>, with ...`。漏掉场景 = 场景不吃卡、不吃参考图
    - **`with` 后面把可见外观逐个点名**：脸型 / 发型（长度+颜色）/ 服装款式颜色 / 配饰 / 显著磨损。**外貌原文取自资产 `appearance`/`styling`/`description`/`prompt`/`location` 字段转写英文，不得省略、不得另编**
    - **只用于定义主体、不当帧锚点的图，不要给它独立 `<Picture N>` 行**，只在 `<Subject N>` 定义里引用（官方：*If an image is used only to define a character, scene, costume, or style, do not create a standalone picture entry.*）
+   - **🔴 参考图是"多视角板"时，`<Subject N>` 定义必须点明各视角（2026-10-09 立）**：
+     - **判断依据**：**只看该资产的 `final_prompt` / `prompt`（生图定稿）**，里面写明是多视角板（`三联参考板`/`三视图板`/`四格板`/`character sheet`/`multiple views`/`shown from N angles`）。**明确不看 `description`** —— 那是物品外观描述，不许往里放任何排版/布局信息（2026-10-09 踩过：往 description 塞了「左大格/右上小格」，污染外观字段，已回滚）。**没写明就按单视角处理，不许自己猜**。
+     - **为什么必须点明**：板里同时出现**正面和背面**时，不点明 = 模型把它们当成**几个不同的东西** → 道具直接复制成两张（2026-10-09 实测根因之一）。
+     - **写法（道具三视图板）**：`<Subject 3> is the registration form shown from three angles in <Picture 3>: a top-down view of its printed front, a three-quarter view of the same sheet, and its blank back — one single sheet seen three ways, not two or three separate forms.`
+     - **角色四格板可不写四格**（模型天然理解人的正侧背），但**道具、以及任何带正反面的物体必须写**。
+     - **`retention_analysis` 同步**：末尾加 `stays identical from every angle shown in <Picture 3>; one single sheet, never duplicated.`
    - **鞋写 `cloth shoes`（布鞋），禁写 `liberation shoes`**——直译词会被模型渲染成奇怪的靴子
    - **道具必须至少有一个"能看清全貌"的镜头，但靠机位不靠角色举（2026-10-09 三轮实测定稿）**：
      - **为什么需要**：如果 `<Subject N>` 全程只是"被攥在手里 / 被折起来 / 塞进口袋"，画面里没有可锁定的载体，模型会脑补 → 道具必丢。
@@ -220,4 +245,4 @@ non_diegetic_music:
 5. **`overall_soundscape`** — 环境音（英文）；无台词镜头写死无人声明 `(No human voice in this segment except the dialogue lines explicitly written below; no narration, no humming, no singing.)`
 6. **`non_diegetic_music`** — 观众才能听到的配乐；无则 `N/A`
 
-**保存前自检**：`CAST:` 与 `BLOCKING:` 两行在 `subject_definitions` 之前（整篇最前）且内容齐全 / 官方六段名齐全且顺序对 / 每行 `subject_definitions` 都有 `<Picture N>` + `with` 外观 / `retention_analysis` 无 `(Sx)` / 台词**全句**逐字来自 description（无截断改写，删句已标注）/ 旁白者指定为画面里某个角色且声音卡写成 `<Subject N>'s off-screen narration` / 锁嘴紧贴在 `<d>` 台词旁（没隔动作描写）/ `Same exposure...` 只在风格句出现一次（没每拍复读）/ 正文英文（除 `<d>` 与画面文字）
+**保存前自检**：`CAST:` 与 `BLOCKING:` 两行在 `subject_definitions` 之前（整篇最前）且内容齐全 / 官方六段名齐全且顺序对 / **道具表面文字没写内容**（只出现 `the printed side`/载体+动作这类说法，**没有**任何引号里的纸面文字原文） / 每行 `subject_definitions` 都有 `<Picture N>` + `with` 外观 / `retention_analysis` 无 `(Sx)` / 台词**全句**逐字来自 description（无截断改写，删句已标注）/ 旁白者指定为画面里某个角色且声音卡写成 `<Subject N>'s off-screen narration` / 锁嘴紧贴在 `<d>` 台词旁（没隔动作描写）/ `Same exposure...` 只在风格句出现一次（没每拍复读）/ 正文英文（除 `<d>` 与画面文字）
