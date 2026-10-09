@@ -788,7 +788,9 @@
                   <video :src="'/' + taskVideoPath(h)" :poster="posterOf('/' + taskVideoPath(h)) || undefined" preload="none" muted playsinline tabindex="-1" />
                   <span class="video-history-time">{{ formatHistoryTime(taskCreatedAt(h)) }}</span>
                   <span v-if="isCurrentVideo(h)" class="video-history-badge">{{ t('episode.vid.current') }}</span>
-                  <button v-else type="button" class="video-history-del" :title="t('episode.vid.deleteRecord')" @click.stop="removeHistoryVideo(h)">×</button>
+                  <!-- 2026-10-09：当前主视频也能删（原先是 v-if/v-else 互斥，导致刚生成的那条唯一删不掉）。
+                       当前时删除按钮左移，避开"当前"徽章 -->
+                  <button type="button" class="video-history-del" :class="{ shifted: isCurrentVideo(h) }" :title="t('episode.vid.deleteRecord')" @click.stop="removeHistoryVideo(h)">×</button>
                 </div>
               </div>
             </div>
@@ -3124,11 +3126,22 @@ async function setAsMainVideo() {
 // `const { t } = useI18n()` 遮蔽了，导致 `t('episode.vid.historyDeleted')` 变成"把记录对象当函数调"
 // → TypeError → 掉进 catch → 弹「删除失败」。而前面的 `taskAPI.del` 和本地 filter 都已执行完，
 // 所以表现为：视频消失了、后端确实删了、却提示删除失败。（模板里传进来的就叫 `h`，与之对齐）
+// 2026-10-09：当前主视频也能删。删的若是当前主视频，要把 video_url 改指次新的一条；
+// 一条不剩就清空，否则 video_url 会指向一条已删除的任务（播放器黑屏）。
 async function removeHistoryVideo(h) {
+  const sb = selectedSb.value
+  const wasCurrent = isCurrentVideo(h)
   try {
     await taskAPI.del(h.id)
     sbVideoHistory.value = sbVideoHistory.value.filter(x => x.id !== h.id)
     if (previewVideoUrl.value === taskVideoPath(h)) previewVideoUrl.value = ''
+    if (wasCurrent && sb) {
+      const next = sbVideoHistory.value[0]        // 列表已按创建时间倒序，[0] 就是次新的一条
+      const nextPath = next ? taskVideoPath(next) : ''
+      await storyboardAPI.update(sb.id, { video_url: nextPath })
+      sb.video_url = nextPath
+      sb.videoUrl = nextPath
+    }
   } catch (e) { toastError(e, { fallback: 'common.deleteFailed' }); return }
   toast.success(t('episode.vid.historyDeleted'))
 }
@@ -4874,6 +4887,8 @@ onMounted(() => setTimeout(() => autoTour('episode', EPISODE_TOUR, t), 900))
   cursor: pointer;
 }
 .video-history-item:hover .video-history-del { display: flex; }
+/* 当前主视频：删除按钮左移，避开"当前"徽章（两者默认都在右上角） */
+.video-history-del.shifted { right: 42px; }
 .video-task-player {
   min-width: 0;
   min-height: 0;

@@ -167,19 +167,31 @@ non_diegetic_music:
    - **`with` 后面把可见外观逐个点名**：脸型 / 发型（长度+颜色）/ 服装款式颜色 / 配饰 / 显著磨损。**外貌原文取自资产 `appearance`/`styling`/`description`/`prompt`/`location` 字段转写英文，不得省略、不得另编**
    - **只用于定义主体、不当帧锚点的图，不要给它独立 `<Picture N>` 行**，只在 `<Subject N>` 定义里引用（官方：*If an image is used only to define a character, scene, costume, or style, do not create a standalone picture entry.*）
    - **鞋写 `cloth shoes`（布鞋），禁写 `liberation shoes`**——直译词会被模型渲染成奇怪的靴子
-   - **道具必须至少有一个"能看清全貌"的镜头（2026-10-09 实测）**：如果 `<Subject N>` 全程只是"被攥在手里 / 被折起来 / 塞进口袋"，画面里就没有可锁定的载体，模型会按自己脑补画 → 成片道具必丢。至少给一拍让它**完整、正对镜头、不被人手大面积遮挡**地出现（如 `the form lies flat, fully visible facing the camera`）。**但不要为了锁道具把每个对象都摆到镜头前**——那会逼模型加奇怪动作、反而穿帮；锁道具靠"一个清楚的全貌镜头"就够
-   - 有声音卡时加一行 `<Audio 1> is the voice-timbre reference for <Subject N> (S1).`
+   - **道具必须至少有一个"能看清全貌"的镜头，但靠机位不靠角色举（2026-10-09 两轮实测定稿）**：
+     - **为什么需要**：如果 `<Subject N>` 全程只是"被攥在手里 / 被折起来 / 塞进口袋"，画面里没有可锁定的载体，模型会脑补 → 道具必丢。
+     - **🔴 怎么给：禁止写 `facing the camera` / `toward the camera` / `presented to the viewer`** —— 这些词会让模型把道具/肢体**正对观众展示**，成片就是"角色举着报到单给观众看"，非常出戏（2026-10-09 实测复现，用户明确否掉）。**让道具入画靠机位**：俯拍（high-angle / overhead）、过肩（over her shoulder）、镜头在手的斜上方（camera looks down at the form in her hands）。**并且角色视线必须落在道具上**（`her gaze down on the form`）—— 是"她在看"，不是"给观众看"。
+     - **🔴 不许自己加镜头**：剧本 description 里没写的道具镜头，一个都不许补。剧本写"她低头盯住那张纸"就照抄她低头看；剧本那拍只有手掌，就不许把报到单塞进去（2026-10-09 实测：146 镜头1 剧本只有掌心，LLM 自己加了报到单平铺朝镜头）。
+     - **反例（禁用）**：`the form lying flat and fully visible facing the camera` ❌
+     - **正例**：`the camera looks down at the form lying open in her hands, her gaze fixed on the paper` ✅
+   - 有声音卡时加一行 `<Audio 1>`。**声音卡是音色参考；画外音没有单独的参考音源，所以旁白必须指定画面里某个角色当旁白者**（一般就是主角自己）：
+     - 本段**有旁白/画外音** → `<Audio 1> is the voice-timbre reference for <Subject N>'s off-screen narration (S1); use it only as a timbre reference and do not reproduce its words.`（绑的是**该角色的旁白音色**，不是"画面里正在说话的嘴"）
+     - 本段**全是在场对白、没有旁白** → `<Audio 1> is the voice-timbre reference for <Subject N> (S1).`
 2. **`summary`** — 一段英文，**以方括号任务类型开头**；本管线统一用 `[reference generation]`（有参考图但不以某图为首帧/关键帧、也不是编辑或续拍源视频时）。官方类型表：`keyframe completion` / `reference generation` / `video editing` / `video continuation` / `audio reuse` / `audio reference`，多关系用 ` + `
 3. **`retention_analysis`** — 每个标签一行，关系词只能用 `fully_preserved` / `partially_preserved` / `attribute_transfer` / `weak_reference`
-   - `<Audio N>` 用 `reference`：`<Audio 1>: reference - its vocal timbre guides the dialogue delivery of <Subject N> without copying the original signal.`
+   - `<Audio N>` 用 `reference`：
+     - 有旁白时：`<Audio 1>: reference - its vocal timbre guides <Subject N>'s off-screen narration without copying the original signal.`
+     - 全是在场对白时：`<Audio 1>: reference - its vocal timbre guides the dialogue delivery of <Subject N> without copying the original signal.`
    - **本段严禁出现 `(S1)` 这类说话人编号**（官方：*Do not write `(Sx)` in `retention_analysis`.*）
 4. **`detailed_description`** — 正文
    - **`[Shot 1]` 不加时间戳**，后续镜头 `[Shot 2] At 00:06.000, ...`
    - **风格句写在 `[Shot 1]` 之前、单独一两句**（T2VA 写在 Shot1 之后，Ref2VA 写在之前——这是官方差异点）
    - 主体**首次清晰出现时**描述外观特征 + 画面位置 + 当前动作；后续镜头沿用同一 `<Subject N>`，**不重复定义**
-   - 对白说话人 `<Subject N> (S1)`（该拍人物必须在场、且是真正在说话）
-   - **🔴 旁白/画外音的说话人不能绑在画面里的 `<Subject N>` 上**：写 `<Subject 2> (S1) says off-screen` 会被模型渲染成"屏幕上一个人 + 另一个人在说话"= 双人穿帮（2026-10-09 实测复现）。改用官方给的另一条路：**稳定嗓音描述 + `(Sx)`**，如 `A young woman's low restrained voice (S1) speaks off-screen: <d>[Chinese] 原文</d>`，同时标 `off-screen`
-   - **画外音那一拍若画面里有人物，必须锁嘴**：官方示例原句 `She closes her lips` / `his lips remain completely closed`。写 `her lips stay closed, she does not speak on screen`——否则模型让画面里的人张嘴对口型旁白（2026-10-08 踩过，英文版必须继承）
+   - **说话人只有一种写法**（2026-10-09 立，取代此前所有旧写法）：
+     - **在场对白**（该拍人物真在说话）：`<Subject 2> (S1) says, <d>[Chinese] 台词</d>`
+     - **旁白/画外音**：`<Subject 2>'s voice-over (S1) speaks off-screen while on screen her lips stay completely closed and her mouth does not move: <d>[Chinese] 台词</d>`
+     - **旁白者必须指定为画面里某个角色**（一般就是主角自己）——画外音没有独立参考音源，不指定旁白者 = 模型自己编一个声音
+     - **🔴 禁用这两种写法**（都会让模型把说话动作挂到画面里的人身上，导致嘴动/双人）：① `<Subject 2> (S1) says off-screen` ② `A young woman's low restrained voice (S1) speaks off-screen`（嗓音描述式 = 没指定旁白者，2026-10-09 实测复现）
+   - **🔴 锁嘴必须与台词同句**（不能隔动作描写）：官方示例原句 `She closes her lips`。锁嘴必须**直接贴在 `<d>` 前或后**，中间不得插入任何动作/画面描写（2026-10-09 实测：锁嘴写在拍子开头、台词在末尾，中间隔了三个动作从句 → 模型照样让嘴动）
    - **`retention_analysis` 里一律不出现 `(Sx)`**（说话人编号只在 `detailed_description` 出现）
    - 台词只写 `<d>[Chinese] 原文</d>`，**中文逐字取自分镜 description，禁止改写或自编**
    - **🔴 台词只许整句删，不许截断或改写（2026-10-09 实测）**：把一句台词砍成两句、或删掉半句，会悄悄吞掉剧情（实测「撞见了张建国」被整段抹掉）。塞不下就**整句删**；删句必须在中文工作版显式标注（如 `（本段未采用：XX句——原因：10秒装不下）`），让用户看得见
@@ -188,4 +200,4 @@ non_diegetic_music:
 5. **`overall_soundscape`** — 环境音（英文）；无台词镜头写死无人声明 `(No human voice in this segment except the dialogue lines explicitly written below; no narration, no humming, no singing.)`
 6. **`non_diegetic_music`** — 观众才能听到的配乐；无则 `N/A`
 
-**保存前自检**：六段名齐全且顺序对 / 每行 `subject_definitions` 都有 `<Picture N>` + `with` 外观 / `retention_analysis` 无 `(Sx)` / 台词**全句**逐字来自 description（无截断改写，删句已标注）/ 旁白说话人用嗓音描述而非 `<Subject N>` 且在场人物写了锁嘴 / `Same exposure...` 只在风格句出现一次（没每拍复读）/ 正文英文（除 `<d>` 与画面文字）
+**保存前自检**：六段名齐全且顺序对 / 每行 `subject_definitions` 都有 `<Picture N>` + `with` 外观 / `retention_analysis` 无 `(Sx)` / 台词**全句**逐字来自 description（无截断改写，删句已标注）/ 旁白者指定为画面里某个角色且声音卡写成 `<Subject N>'s off-screen narration` / 锁嘴紧贴在 `<d>` 台词旁（没隔动作描写）/ `Same exposure...` 只在风格句出现一次（没每拍复读）/ 正文英文（除 `<d>` 与画面文字）
