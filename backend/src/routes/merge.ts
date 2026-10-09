@@ -55,4 +55,21 @@ app.get('/episodes/:id/merges', async (c) => {
   return success(c, merges.slice(0, 30).map(toSnakeCase))
 })
 
+// DELETE /episodes/:id/merges/:mergeId — 删除一条拼接成品（软删）
+// 2026-10-09：成片列表原先只有「下载」，拼接完的成品删不掉。表里本就有 deleted_at，
+// 列表端点也已在过滤 isNull(deletedAt)，所以只补端点 + 前端按钮即可。
+app.delete('/episodes/:id/merges/:mergeId', async (c) => {
+  const episodeId = Number(c.req.param('id'))
+  const mergeId = Number(c.req.param('mergeId'))
+  if (!mergeId) return badRequest(c, '缺少成片 id')
+  const [row] = await db.select().from(schema.videoMerges).where(eq(schema.videoMerges.id, mergeId))
+  if (!row) return badRequest(c, '成片不存在')
+  if (row.episodeId !== episodeId) return badRequest(c, '成片不属于本集')
+  logTaskStart('MergeAPI', 'delete-merge', { episodeId, mergeId })
+  await db.update(schema.videoMerges).set({ deletedAt: new Date().toISOString() })
+    .where(eq(schema.videoMerges.id, mergeId))
+  logTaskSuccess('MergeAPI', 'delete-merge', { episodeId, mergeId })
+  return success(c)
+})
+
 export default app

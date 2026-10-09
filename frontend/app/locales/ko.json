@@ -855,6 +855,8 @@
       "mergingToast": "병합 중...",
       "mergeDone": "병합이 완료되었습니다",
       "mergeFailed": "병합에 실패했습니다",
+      "deleteRecord": "이 성편 삭제",
+      "mergeDeleted": "이 성편을 삭제했습니다",
       "previewShot": "이 샷 재생",
       "shotPreview": "샷 #{n} 미리보기",
       "markDone": "완료로 표시",

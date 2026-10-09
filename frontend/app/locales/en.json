@@ -863,6 +863,8 @@
       "mergingToast": "Merging...",
       "mergeDone": "Merge complete",
       "mergeFailed": "Merge failed",
+      "deleteRecord": "Delete this cut",
+      "mergeDeleted": "Cut deleted",
       "previewShot": "Play this shot",
       "shotPreview": "Shot #{n} preview",
       "markDone": "Mark done",

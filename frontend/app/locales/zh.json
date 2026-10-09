@@ -863,6 +863,8 @@
       "mergingToast": "拼接中...",
       "mergeDone": "拼接完成",
       "mergeFailed": "拼接失败",
+      "deleteRecord": "删除该成片",
+      "mergeDeleted": "已删除该成片",
       "previewShot": "播放该镜头",
       "shotPreview": "镜头 #{n} 预览",
       "markDone": "标记完成",

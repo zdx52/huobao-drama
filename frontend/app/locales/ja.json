@@ -855,6 +855,8 @@
       "mergingToast": "結合中...",
       "mergeDone": "結合が完了しました",
       "mergeFailed": "結合に失敗しました",
+      "deleteRecord": "この成片を削除",
+      "mergeDeleted": "この成片を削除しました",
       "previewShot": "このショットを再生",
       "shotPreview": "ショット #{n} プレビュー",
       "markDone": "完了にする",
