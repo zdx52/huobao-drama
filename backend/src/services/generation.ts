@@ -231,7 +231,13 @@ export async function generateVideo(params: GenerateVideoParams): Promise<number
   const body0 = holdHead + basePrompt
   const refUrls = [...(params.referenceImageUrls || [])]
   let lock = ''
-  if (body0.trim()) {
+  // 2026-10-09：已是官方 Ref2VA 六段式的 prompt（video_prompt_en，真发给 H3 的那份）不拼锁块 ——
+  // 中转 hb_strip_backend_locks 会把 verbatim_lock 起的整段删掉，拼了等于白占 7000 字符额度：
+  // sb147 实测 7608(英文版) + 591(风格头) + 203(锁块) = 8403 被拒。身份/外观已由 RefMod 卡 +
+  // 参考图 + subject_definitions 三重负责，锁块对六段式无增益；老格式（无六段标记）仍拼。
+  const isOfficialSix = ['subject_definitions:', 'retention_analysis:', 'detailed_description:']
+    .every((m) => body0.includes(m))
+  if (body0.trim() && !isOfficialSix) {
     const rows = await storyboardCharacterRows(params.storyboardId)
     // 2026-10-08 去掉「脸格裁切追加」：角色板最左格本来就是脸部特写，而整板已作为参考图下发
     // （且 RefMod 卡就是从整板抽的）——再裁一张等于是同一张脸给模型两遍，还白占参考图名额
