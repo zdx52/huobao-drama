@@ -26,7 +26,7 @@ model: ""
 1. 调用 read_storyboard_context 读取该分镜的 description（含【镜头N】子镜头与台词/旁白）、atmosphere、duration 及绑定的场景/角色（已有提示词时会一并返回 `video_prompt` 与 `video_prompt_en` 现值）
 2. [[[双语生成规则 — 2026-10-09 起必读]]] **同批产出两份**：
    - **`video_prompt`（中文工作版）**：按下面既有规则写给你自己看、给用户审阅与手改，界面显示的是它
-   - **`video_prompt_en`（英文发送版）**：**严格按 MiniMax H3 官方 Ref2VA 六段式写**（规则见下），视频生成实际发送的是它
+   - **`video_prompt_en`（英文发送版）**：**以 MiniMax H3 官方 Ref2VA 六段为骨架**——`subject_definitions` → `summary` → `retention_analysis` → `detailed_description` → `overall_soundscape` → `non_diegetic_music` 的字段名与顺序原样不动，**最前另加 `CAST:` + `BLOCKING:` 一段**（规则见下），视频生成实际发送的是它
 3. 调用 update_storyboard 保存时**必须同时传三个键**：`storyboard_id`、`video_prompt`、`video_prompt_en`。只传一个 = 另一份丢失
 
 ### `video_prompt`（中文工作版）规则
@@ -91,7 +91,7 @@ non_diegetic_music:
    - **`retention_analysis` 里严禁出现 `(S1)` 这类说话人编号**（官方原文：*Do not write `(Sx)` in `retention_analysis`.*）
 4. **`detailed_description`**：正文主体。
    - **`[Shot 1]` 不加时间戳**；后续镜头写 `[Shot 2] At 00:06.000, ...`（官方格式 `[Shot N] At MM:SS.mmm, ...`）
-   - **🔴 CAST + BLOCKING 两段（2026-10-09 立，官方要求写 position/placement 但我们一直欠着）**：**放在风格句之前、`[Shot 1]` 之前**，`detailed_description` 的最前面。**不许新增顶层段名**——六段格式不能动，这两段是 `detailed_description` 内部的开头。
+   - **🔴 CAST + BLOCKING 段（2026-10-09 立；同日按用户拍板，从 `detailed_description` 内部提升为顶层段）**：**放在整个提示词最前面，即 `subject_definitions` 之前**，作为独立一段排在官方六段之上。**官方六段的字段名与顺序原样不动**（`subject_definitions` → `summary` → `retention_analysis` → `detailed_description` → `overall_soundscape` → `non_diegetic_music`），CAST/BLOCKING 只是加在它们之前，不改名、不挤占、不打乱。**旧规则「不许新增顶层段名」已作废（2026-10-09）**：那句是当时自加的绝对措辞，官方只要求保留字段名与顺序（官方 skill 原文 *Preserve the exact field names, section order, labels, and timing notation*），从没下过禁止令——官方本就要求每拍写清 position / subject placement，只是没给这类内容段名。**⚠️ 未实测风险（生成后必须核）**：H3 解析器若严格按官方六段切段，最前多出的这段可能被忽略或报错，首版生成后要贴回来验 H3 有没有吃进去。
      - **CAST（治多脸 / 道具复制成两张）**：点名本段有几个人、几件道具，然后写死数量与"不许重复"：
        `CAST: exactly one young woman, one registration form, one factory gate; no twins, no duplicated figures, no extra people, no second copy of the form, no duplicated wardrobe.`
        **这比在 `subject_definitions` 写 `single` 强得多**——2026-10-09 实测：定义里写了 `a single white paper slip`，成片后半段照样变成两张上下压着。
@@ -122,4 +122,4 @@ non_diegetic_music:
 
 **编号一致性（硬性）**：`<Subject N>` / `<Picture N>` / `<Audio J>` 与 `(Sx)` 四套编号各自独立计数。`(S1)` 归**旁白者**——旁白者必须是画面里某个角色（一般就是主角自己），**不是独立的陌生人**；`<Audio J>` 绑的是**该角色的旁白音色**，写成 `<Subject N>'s off-screen narration (S1)`。
 
-**收尾自检（保存前逐项核）**：六段名齐全且顺序对 / `subject_definitions` 每行都有 `<Picture N>` 且带 `with` 外观 / `retention_analysis` 无 `(Sx)` / 台词**全句**逐字来自 description（无截断改写，删句已标注）/ 旁白者指定为画面里某个角色且声音卡写成 `<Subject N>'s off-screen narration` / 锁嘴紧贴在 `<d>` 台词旁（没隔动作描写）/ `Same exposure...` 只在风格句出现一次（没每拍复读）/ 正文英文（除 `<d>` 与画面文字）
+**收尾自检（保存前逐项核）**：`CAST:` 与 `BLOCKING:` 两行在 `subject_definitions` 之前（整篇最前）且内容齐全 / 官方六段名齐全且顺序对 / `subject_definitions` 每行都有 `<Picture N>` 且带 `with` 外观 / `retention_analysis` 无 `(Sx)` / 台词**全句**逐字来自 description（无截断改写，删句已标注）/ 旁白者指定为画面里某个角色且声音卡写成 `<Subject N>'s off-screen narration` / 锁嘴紧贴在 `<d>` 台词旁（没隔动作描写）/ `Same exposure...` 只在风格句出现一次（没每拍复读）/ 正文英文（除 `<d>` 与画面文字）

@@ -9,7 +9,7 @@ description: 视频提示词规范 — 根据分镜段落内容生成按时间�
 
 > **2026-10-09 起：同批产出两份（必读）**
 > `video_prompt`（中文工作版，界面显示/编辑）+ `video_prompt_en`（英文发送版，视频生成实际发送）。
-> 英文版规则见本文件末尾「英文发送版（H3 官方 Ref2VA 六段式）」节；中文版规则就是下面全部既有内容。
+> 英文版规则见本文件末尾「英文发送版（H3 官方 Ref2VA 六段 + 前置 CAST/BLOCKING）」节；中文版规则就是下面全部既有内容。
 > 保存时必须同时传 `storyboard_id` / `video_prompt` / `video_prompt_en` 三个键。
 
 ## 格式
@@ -145,7 +145,7 @@ description: 视频提示词规范 — 根据分镜段落内容生成按时间�
 
 调用 `update_storyboard` 仅更新该分镜段落的 `video_prompt` 字段，不要改动其他字段，不要重新拆分整集。
 
-## 英文发送版（H3 官方 Ref2VA 六段式）— 2026-10-09 立规
+## 英文发送版（H3 官方 Ref2VA 六段 + 前置 CAST/BLOCKING）— 2026-10-09 立规
 
 `video_prompt_en` 是**真正发给视频模型的那一份**，规则来源 = MiniMax 官方 H3 提示词写作指南（Ref2VA 全参考模式改写输出格式）。**除对话、歌词与画面内可见文字外全部英文。**
 
@@ -190,7 +190,7 @@ non_diegetic_music:
    - **本段严禁出现 `(S1)` 这类说话人编号**（官方：*Do not write `(Sx)` in `retention_analysis`.*）
 4. **`detailed_description`** — 正文
    - **`[Shot 1]` 不加时间戳**，后续镜头 `[Shot 2] At 00:06.000, ...`
-   - **🔴 CAST + BLOCKING 两段（2026-10-09 立，官方要求写 position/placement 但我们一直欠着）**：**放在风格句之前、`[Shot 1]` 之前**，`detailed_description` 的最前面。**不许新增顶层段名**——六段格式不能动，这两段是 `detailed_description` 内部的开头。
+   - **🔴 CAST + BLOCKING 段（2026-10-09 立；同日按用户拍板，从 `detailed_description` 内部提升为顶层段）**：**放在整个提示词最前面，即 `subject_definitions` 之前**，作为独立一段排在官方六段之上。**官方六段的字段名与顺序原样不动**（`subject_definitions` → `summary` → `retention_analysis` → `detailed_description` → `overall_soundscape` → `non_diegetic_music`），CAST/BLOCKING 只是加在它们之前，不改名、不挤占、不打乱。**旧规则「不许新增顶层段名」已作废（2026-10-09）**：那句是当时自加的绝对措辞，官方只要求保留字段名与顺序（官方 skill 原文 *Preserve the exact field names, section order, labels, and timing notation*），从没下过禁止令——官方本就要求每拍写清 position / subject placement，只是没给这类内容段名。**⚠️ 未实测风险（生成后必须核）**：H3 解析器若严格按官方六段切段，最前多出的这段可能被忽略或报错，首版生成后要贴回来验 H3 有没有吃进去。
      - **CAST（治多脸 / 道具复制成两张）**：点名本段有几个人、几件道具，然后写死数量与"不许重复"：
        `CAST: exactly one young woman, one registration form, one factory gate; no twins, no duplicated figures, no extra people, no second copy of the form, no duplicated wardrobe.`
        **这比在 `subject_definitions` 写 `single` 强得多**——2026-10-09 实测：定义里写了 `a single white paper slip`，成片后半段照样变成两张上下压着。
@@ -220,4 +220,4 @@ non_diegetic_music:
 5. **`overall_soundscape`** — 环境音（英文）；无台词镜头写死无人声明 `(No human voice in this segment except the dialogue lines explicitly written below; no narration, no humming, no singing.)`
 6. **`non_diegetic_music`** — 观众才能听到的配乐；无则 `N/A`
 
-**保存前自检**：六段名齐全且顺序对 / 每行 `subject_definitions` 都有 `<Picture N>` + `with` 外观 / `retention_analysis` 无 `(Sx)` / 台词**全句**逐字来自 description（无截断改写，删句已标注）/ 旁白者指定为画面里某个角色且声音卡写成 `<Subject N>'s off-screen narration` / 锁嘴紧贴在 `<d>` 台词旁（没隔动作描写）/ `Same exposure...` 只在风格句出现一次（没每拍复读）/ 正文英文（除 `<d>` 与画面文字）
+**保存前自检**：`CAST:` 与 `BLOCKING:` 两行在 `subject_definitions` 之前（整篇最前）且内容齐全 / 官方六段名齐全且顺序对 / 每行 `subject_definitions` 都有 `<Picture N>` + `with` 外观 / `retention_analysis` 无 `(Sx)` / 台词**全句**逐字来自 description（无截断改写，删句已标注）/ 旁白者指定为画面里某个角色且声音卡写成 `<Subject N>'s off-screen narration` / 锁嘴紧贴在 `<d>` 台词旁（没隔动作描写）/ `Same exposure...` 只在风格句出现一次（没每拍复读）/ 正文英文（除 `<d>` 与画面文字）

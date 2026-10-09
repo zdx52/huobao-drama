@@ -9,7 +9,7 @@ From a single storyboard segment's description (containing the 【镜头N】 sub
 
 > **Mandatory since 2026-10-09: produce BOTH versions in one batch.**
 > `video_prompt` (Chinese working version — what the UI shows and the user edits) + `video_prompt_en` (English send version — what is actually sent for video generation).
-> The English rules live in the "English send version (official H3 Ref2VA six sections)" section at the end of this file; everything below is the Chinese version's rules.
+> The English rules live in the "English send version (official H3 Ref2VA six sections + leading CAST/BLOCKING)" section at the end of this file; everything below is the Chinese version's rules.
 > When saving you must pass three keys: `storyboard_id`, `video_prompt`, `video_prompt_en`.
 
 ## Format
@@ -143,7 +143,7 @@ From segment 2 on, the **runner automatically prepends the airlock head** (hold 
 
 Call `update_storyboard` to update only this storyboard segment's `video_prompt` field; do not modify any other field, and do not re-breakdown the whole episode.
 
-## English send version (official H3 Ref2VA six sections) — established 2026-10-09
+## English send version (official H3 Ref2VA six sections + leading CAST/BLOCKING) — established 2026-10-09
 
 `video_prompt_en` is **the version actually sent to the video model**. Its rules come from the official MiniMax H3 prompt-writing guide (Ref2VA full-reference rewrite output format). **Everything is English except dialogue, lyrics, and text visible in frame.**
 
@@ -188,7 +188,7 @@ non_diegetic_music:
    - **Never write speaker IDs like `(S1)` here** (official: *Do not write `(Sx)` in `retention_analysis`.*)
 4. **`detailed_description`** — the body
    - **`[Shot 1]` carries no timestamp**; later shots use `[Shot 2] At 00:06.000, ...`
-   - **🔴 CAST + BLOCKING (established 2026-10-09 — the official guide requires position/placement and we have been leaving it out)**: put both **before the style sentence and before `[Shot 1]`**, at the very top of `detailed_description`. **Do NOT add a new top-level section** — the six-section format must not change; these two are the opening lines *inside* `detailed_description`.
+   - **🔴 CAST + BLOCKING (established 2026-10-09; same day, per user decision, promoted from inside `detailed_description` to a top-level section)**: put it at the very top of the whole prompt, **before `subject_definitions`**, as its own section above the official six. **The official six sections keep their exact field names and order** (`subject_definitions` → `summary` → `retention_analysis` → `detailed_description` → `overall_soundscape` → `non_diegetic_music`); CAST/BLOCKING is only added ahead of them — no renaming, no displacement, no reordering. **The old rule "Do NOT add a new top-level section" is VOID as of 2026-10-09**: that was an absolute wording I added myself; the official only says preserve field names and order (official skill wording: *Preserve the exact field names, section order, labels, and timing notation*) and never issued a prohibition — the official guide in fact requires position / subject placement per shot, it just does not give this content a section name. **⚠️ Unmeasured risk (must verify after generation)**: if H3's parser strictly splits on the official six sections, this leading section may be ignored or may error — check the first run to confirm H3 actually consumes it.
      - **CAST (fixes duplicated faces / the prop duplicating into two sheets)**: name how many people and how many props are in this segment, then lock the count and forbid repetition:
        `CAST: exactly one young woman, one registration form, one factory gate; no twins, no duplicated figures, no extra people, no second copy of the form, no duplicated wardrobe.`
        **Far stronger than writing `single` in `subject_definitions`** — measured 2026-10-09: the definition said `a single white paper slip` and the second half of the clip still showed two sheets pressed together.
@@ -218,4 +218,4 @@ non_diegetic_music:
 5. **`overall_soundscape`** — ambience (English); shots without dialogue state no human voice: `(No human voice in this segment except the dialogue lines explicitly written below; no narration, no humming, no singing.)`
 6. **`non_diegetic_music`** — score audible only to the audience; `N/A` when absent
 
-**Self-check before saving**: six sections present and in order / every `subject_definitions` line has `<Picture N>` plus a `with` clause / `retention_analysis` contains no `(Sx)` / all dialogue copied **as whole sentences** verbatim from the description (no truncation, no rewording; dropped sentences marked) / narrator designated as one of the on-screen characters and the voice card written as `<Subject N>'s off-screen narration` / lip lock sitting immediately next to the `<d>` line (not separated by action) / `Same exposure...` appears once in the style sentence only (not repeated per shot) / body is English except `<d>` and on-screen text
+**Self-check before saving**: `CAST:` and `BLOCKING:` both present **before `subject_definitions`** (top of the whole prompt) and complete / official six section names present and in order / every `subject_definitions` line has `<Picture N>` plus a `with` clause / `retention_analysis` contains no `(Sx)` / all dialogue copied **as whole sentences** verbatim from the description (no truncation, no rewording; dropped sentences marked) / narrator designated as one of the on-screen characters and the voice card written as `<Subject N>'s off-screen narration` / lip lock sitting immediately next to the `<d>` line (not separated by action) / `Same exposure...` appears once in the style sentence only (not repeated per shot) / body is English except `<d>` and on-screen text
