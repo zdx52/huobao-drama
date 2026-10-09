@@ -36,7 +36,10 @@ export async function startVideoPromptBatch(
     .orderBy(schema.storyboards.storyboardNumber)
   const pending = storyboardIds?.length
     ? sbs.filter(sb => storyboardIds.includes(sb.id))
-    : sbs.filter(sb => !(sb.videoPrompt || '').trim())
+    // 2026-10-09：中英文**任一**缺失都算缺。英文版是视频生成唯一可用的那份
+    // （前端已硬保护：缺英文版直接报错不发送），只判中文版会出现
+    // 后端说"已齐"、前端说"发不了"的死锁。
+    : sbs.filter(sb => !((sb.videoPrompt || '').trim() && (sb.videoPromptEn || '').trim()))
   if (!pending.length) return { started: false, total: 0 }
 
   // 视频模型标签：跟随该集锁定的视频配置，供 Agent 按模型特性生成
@@ -76,12 +79,12 @@ export async function startVideoPromptBatch(
 请先调用 read_storyboard_context 获取该分镜的画面描述(含【镜头N】子镜头与台词/旁白)、氛围及时长，据此**同批生成两份**：video_prompt(中文工作版)与 video_prompt_en(H3 官方 Ref2VA 六段式英文版,规则见 video-prompt 技能「英文发送版」节)。
 update_storyboard 必须同时传三个键: storyboard_id、video_prompt、video_prompt_en。不要回传该分镜的其他任何字段,不要重新拆分整集。`,
         }], { maxSteps: 8, requestContext })
-        // 以实际落库为准判定成败
+        // 以实际落库为准判定成败（2026-10-09：中英两份都落库才算成功，只看中文版会漏判）
         const [fresh] = await db.select().from(schema.storyboards).where(eq(schema.storyboards.id, sb.id))
-        if ((fresh?.videoPrompt || '').trim()) task.completed++
+        if ((fresh?.videoPrompt || '').trim() && (fresh?.videoPromptEn || '').trim()) task.completed++
         else {
           task.failed++
-          logTaskError('VideoPrompt', 'batch-shot', { storyboardId: sb.id, error: 'agent finished but video_prompt is empty' })
+          logTaskError('VideoPrompt', 'batch-shot', { storyboardId: sb.id, error: 'agent finished but video_prompt or video_prompt_en is empty' })
         }
       } catch (err: any) {
         task.failed++

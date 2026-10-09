@@ -2227,6 +2227,12 @@ async function chainVideos() {
     toast.error(t('episode.vid.chainNeedTwo'))
     return
   }
+  // 硬保护：链上任一分镜缺英文版提示词就整链不发（2026-10-09，同 genVid）
+  const noEn = ordered.find(s => !getVideoPromptEn(s))
+  if (noEn) {
+    toast.error(t('episode.vid.needPromptEn'))
+    return
+  }
   const segments = ordered.map(sb => ({
     storyboard_id: sb.id,
     drama_id: dramaId,
@@ -2924,7 +2930,8 @@ function doBreakdown() {
 /** 拆分完成后刷新并自动补齐缺失的视频提示词（兜住 Agent 漏写/截断） */
 async function onBreakdownDone() {
   await refresh()
-  const missing = sbs.value.filter(sb => !(sb.video_prompt || sb.videoPrompt || '').trim())
+  const missing = sbs.value.filter(sb => !((sb.video_prompt || sb.videoPrompt || '').trim()
+    && (sb.video_prompt_en || sb.videoPromptEn || '').trim()))
   if (missing.length) batchVideoPrompts()
 }
 
@@ -3334,10 +3341,18 @@ function getShotReferenceIndexMap(sb) {
   return nameToIndex
 }
 
+// 英文发送版（H3 官方 Ref2VA 六段式）——视频生成唯一可用的提示词。
+// 2026-10-09 硬保护：不再回退中文版。中文版一旦发出，中转只能走老格式转换；
+// 漏转换就会把中文裸发给 H3 → 模型把中文当台词念（「乱说」的根因，2026-10-09 实测）。
+// 缺英文版时必须当场报错，不能静默降级。
+function getVideoPromptEn(sb) {
+  return sb?.video_prompt_en || sb?.videoPromptEn || ''
+}
+
 // 将视频提示词里的 @名字 替换为 @图片N名字（N 为参考图序号，1 起），生成时使用
-// 2026-10-09：优先用英文版 video_prompt_en（H3 官方六段式）；没有（老数据/未生成英文版）时退回中文版
+// 2026-10-09：只读英文版（H3 官方六段式，用 <Subject N> 而非 @名字，本替换对它基本是空操作）
 function resolveVideoPromptRefs(sb) {
-  const prompt = sb.video_prompt_en || sb.videoPromptEn || sb.video_prompt || sb.videoPrompt || ''
+  const prompt = getVideoPromptEn(sb)
   const map = getShotReferenceIndexMap(sb)
   const names = Object.keys(map).sort((a, b) => b.length - a.length)
   if (!names.length) return prompt
@@ -3405,6 +3420,17 @@ function uploadAssetImage(kind, id) {
 
 async function genVid(sb, opts = {}) {
   const referenceImages = getShotReferenceImages(sb)
+  // 硬保护：没有英文版提示词就绝不发送（2026-10-09）。中文版已不再回退——
+  // 发中文版会走中转老格式转换，漏转换 = 中文裸发 H3 = 乱念台词。
+  // opts.silent 只挡成功提示，这里必须弹，批量也会弹。
+  if (!getVideoPromptEn(sb)) {
+    failedVideoMessages.value = {
+      ...failedVideoMessages.value,
+      [sb.id]: t('episode.vid.needPromptEn'),
+    }
+    toast.error(t('episode.vid.needPromptEn'))
+    return
+  }
   // 参考素材完全来自分镜绑定的角色/场景/道具图片
   const params = {
     storyboard_id: sb.id,

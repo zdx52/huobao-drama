@@ -782,6 +782,7 @@
       "deleteRecord": "이 기록 삭제",
       "historyDeleted": "이 기록이 삭제되었습니다",
       "needRefOrPrompt": "참조 소재 또는 영상 프롬프트가 최소 1개 필요합니다",
+      "needPromptEn": "이 숏에는 영어 버전 프롬프트가 없습니다. 먼저 영어 버전을 생성한 후 영상을 생성하세요",
       "generating": "영상 생성 중",
       "genDone": "영상 생성이 완료되었습니다",
       "genFailed": "영상 생성에 실패했습니다",

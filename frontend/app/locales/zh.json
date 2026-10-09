@@ -782,6 +782,7 @@
       "deleteRecord": "删除该记录",
       "historyDeleted": "已删除该历史记录",
       "needRefOrPrompt": "需要至少一个参考素材或视频提示词",
+      "needPromptEn": "该分镜还没有英文版提示词，请先生成英文版再生成视频",
       "generating": "视频生成中",
       "genDone": "视频生成完成",
       "genFailed": "视频生成失败",

@@ -782,6 +782,7 @@
       "deleteRecord": "Delete this record",
       "historyDeleted": "History record deleted",
       "needRefOrPrompt": "At least one reference asset or a video prompt is required",
+      "needPromptEn": "This shot has no English prompt yet — generate the English version first",
       "generating": "Video generating",
       "genDone": "Video generation complete",
       "genFailed": "Video generation failed",
