@@ -34,11 +34,11 @@ model: ""
 通用规范：
 - 所有提示词使用本次会话语言指令指定的目标语言输出，单段连贯描述，不要分点，不要混入无关词汇
 - 项目设定的视觉风格描述会由工具在保存图片提示词时自动注入到最终提示词的最前方，不要自行添加风格词
-- 曝光锁字：每段 video_prompt 必须含 same exposure, same white balance, no new light source；禁用 flickering/sunlit/glowing/radiant/dramatic reveal/brighter（叙事词会被模型翻译成打光，致整段变亮）
+- 曝光一致性：**只在风格句里写一次**（`detailed_description` 开头、`[Shot 1]` 之前那一两句里带上 consistent exposure and white balance throughout, no new light source）；**禁止每拍复读** `same exposure, same white balance, no new light source`（白烧 token 还稀释注意力，每拍一句挤掉了真正的画面信息）。禁用 flickering/sunlit/glowing/radiant/dramatic reveal/brighter（叙事词会被模型翻译成打光，致整段变亮）
 - 续拍链分镜（第 2 段起）：**正文一律不写承接句**（不写"承接上段结尾构图""接上段"这类话，runner 会自动前置 airlock）；**第一句不要重复上段尾字/尾词**；hold 段无台词，只给呼吸/重心/视线微动作；**第一个时间段的机位、景别、人物数量与相对位置必须与上段结尾一致**（同构图延续），换机位/换景别/增减人物一律放到第二个时间段之后——模型把"既要延续又要变化"渲染成并集（上段结尾是 A 的特写、本段写"B 和 C 的双人镜"，出来是三个人）
 - 画外音统一写 `旁白：…` 或 `画外音：…`，禁止 `X说（画外…）` 写法（带"说"字模型可能让人物张嘴）
 - **画面内文字（场景与道具同规，硬性）**：画面里只要可能出现文字（招牌店招、门牌、路牌、横幅标语、海报、报纸书刊标题、标签包装、屏幕字幕、印章题字、时钟数字），就必须在提示词里**用引号逐字写出要显示的文字**并写明位置载体（如 `画面左侧木质招牌上写着"老张面馆"四个字`）；中文 ≤6 字、英文/数字 ≤2 个词（越长越容易糊、越容易错）；文字内容优先**逐字照抄**资产 `name`/`prompt`/`location`/`description` 里已有的原文，禁止改写、禁止自己编；确实没有文字就明确写"画面中不出现任何文字、字母、数字、水印"（道具写"表面无文字"）。**纸张/证件类道具（单据/证件/信纸/报纸/书页/照片）另有两条硬性**：① **内容要编全**——标题（大字）+ 正文 2~4 行 + 落款（人名/日期）+ 印章（章内的字），各成一组、逐字写死（纸面大，只写一个标题太空洞；例：`纸面竖排写着"报到证"三个大字；正文三行分别写着"林巧""红星机械厂""二车间钳工"；右下角落款"三月十七日"；红章内写着"红星机械厂"`）；② **背面留空**——写死「纸张不透光，背面是空白纸背，不透出正面任何字迹、表格线与印章」，纸张翻面/转动/背面朝镜头/被举向光时尤其要写（实测穿帮：报到单从背面也能看到内容），禁写「纸张很薄/半透明/能透出」
-- **正文瘦身（2026-10-08 立规，必守）**：身份与外观**不写进正文**——"长什么样"由三重锁定负责：① 身份卡（正文 `<Subject N>` ↔ 卡槽 `mod_N`）② 参考图（`<Picture N>`）③ 后端机械注入的 `verbatim_lock`（角色 `styling`/`appearance` 原文、场景 `prompt`/`lighting` 原文整串钉在末尾）。正文只写：场景环境与光线、机位/景别/运动、人物动作与表演、情节推进、台词/旁白、音景、`same exposure…` 曝光锁、切镜。**每个出场角色只写 `@名`**（首次可带一次参照格 `@林巧（参照脸部特写格）`），同一角色再次出现**只写 `@名`**，不再复述任何特征；**禁止**把 `styling`/`appearance` 原文串搬进正文（那是锁块的活）。**唯一例外：本段发生的外观变化**（衣服湿透、脸上沾油、换装、受伤、戴面具）必须写进正文——卡与锁块只管不变的基准，变化只能靠正文表达，且后续各段沿用变化后的状态。**收尾自检**：正文里不应出现任何角色的外貌/妆造原文串（出现即没瘦身，删掉）；每个出场角色的 `@名` 都在
+- **正文瘦身（2026-10-08 立规，必守）**：身份与外观**不写进正文**——"长什么样"由三重锁定负责：① 身份卡（正文 `<Subject N>` ↔ 卡槽 `mod_N`）② 参考图（`<Picture N>`）③ 后端机械注入的 `verbatim_lock`（角色 `styling`/`appearance` 原文、场景 `prompt`/`lighting` 原文整串钉在末尾）。正文只写：场景环境与光线、机位/景别/运动、人物动作与表演、情节推进、台词/旁白、音景、切镜（曝光一致性**只在风格句提一次**，不占每拍）。**每个出场角色只写 `@名`**（首次可带一次参照格 `@林巧（参照脸部特写格）`），同一角色再次出现**只写 `@名`**，不再复述任何特征；**禁止**把 `styling`/`appearance` 原文串搬进正文（那是锁块的活）。**唯一例外：本段发生的外观变化**（衣服湿透、脸上沾油、换装、受伤、戴面具）必须写进正文——卡与锁块只管不变的基准，变化只能靠正文表达，且后续各段沿用变化后的状态。**收尾自检**：正文里不应出现任何角色的外貌/妆造原文串（出现即没瘦身，删掉）；每个出场角色的 `@名` 都在
 - **点名格子只能从四格名里选一个并逐字照抄**：`脸部特写格` / `正面全身格` / `90度左侧面全身格` / `背面全身格`（三视图都有头，**不得**再写"无头"字样）——禁止造格（如"手部格"）、禁止一次点两格、禁止改格子名
 - **安静处必须写死"无任何人声"**：任何没有台词/旁白的节拍，必须明确写"**本段无任何人声，只有……环境音**"，否则 H3 会在安静镜头里**自己脑补说话声**（官方指南原话：安静的镜头若冒出你没要求的人声，就把音频字段写明再重跑）。凡有台词的节拍，说话人必须写明（`旁白：` / `X说：`）。**逐拍过，不是整段过**——每一拍各自都要有声明（2026-10-08 实测翻车：6-9 秒那拍漏写 → 成片在那里乱说话并溢到下一拍；逐拍自检清单见 video-prompt 技能「提交前自检」）
 - **台词窗（链上每一段都适用，含单段重拍）**：**段首 2 秒 + 段尾 2 秒一律不写台词/旁白**。链会把上一段结尾的音频钉进本段开头：上段结尾若是"说到一半的话"，本段开头又写新台词，两句会打架，听感就是"乱说"（2026-10-08 实测确认；而"读数字/打鼓"这类**持续性声音**的续接不会乱，因为下一段在继续同一件事）。所以 **10 秒段的台词窗只有中间约 6 秒**
@@ -61,9 +61,13 @@ non_diegetic_music:
 ```
 
 1. **`subject_definitions`**：每个出场主体一行。**必须写成 `<Subject N> is the <类别> in <Picture N>, with <外观特征>`** —— 官方原文口径：`<Subject 1> is the young woman in <Picture 1>, with long dark hair, a blue cardigan, and a thin silver necklace.`
-   - `<Picture N>` 的 N = 该主体对应参考图的序号；**若某张图只是用来定义某个主体、不会单独当帧锚点，就不要给它独立的 `<Picture N>` 行，只在 `<Subject N>` 定义里引用**（官方原文：*If an image is used only to define a character, scene, costume, or style, do not create a standalone picture entry.*）
+   - **🔴 `<Picture N>` 编号 = 参考图实际顺序，不是出场顺序**：本管线的参考图顺序固定为 **场景第 1 张 → 角色第 2..N 张 → 道具最后**（与 `@图片N` 注入顺序、RefMod 卡槽 `mod_N` 三者同号）。所以 3 张参考图时：`<Picture 1>` = 场景、`<Picture 2>` = 林巧、`<Picture 3>` = 报到单。**不许按"谁先出场就从 1 编起"** —— 编号错位会让 `<Subject N>` 对上错误的 `mod_N` 卡（场景卡被当成身份卡 = 脸必漂）
+   - **场景也必须有 `<Subject N>`**：`<Subject 1> is the scene in <Picture 1>, with ...`。漏掉场景 = 场景不吃卡、不吃参考图
+   - **若某张图只是用来定义某个主体、不会单独当帧锚点，就不要给它独立的 `<Picture N>` 行，只在 `<Subject N>` 定义里引用**（官方原文：*If an image is used only to define a character, scene, costume, or style, do not create a standalone picture entry.*）
    - `with` 后面必须**把该主体的可见外观逐个点名**：脸型/发型（含长度颜色）/服装款式颜色/配饰/显著磨损。**外貌原文取自资产的 `appearance`/`styling`/`description`/`prompt`/`location` 字段，转写成英文，不得省略、不得自己另编一套**
    - 道具同样要有 `<Subject N>`：`<Subject 3> is the registration form in <Picture 3>, with ...`
+   - **道具必须至少有一个"能看清全貌"的镜头（2026-10-09 实测）**：如果 `<Subject N>` 全程只是"被攥在手里 / 被折起来 / 塞进口袋"，画面里就没有可锁定的载体，模型会按自己脑补画 → 成片道具必丢。至少给一拍让它**完整、正对镜头、不被人手大面积遮挡**地出现（如 `the form lies flat, fully visible facing the camera`）。**但不要为了锁道具把每个对象都摆到镜头前**——那会逼模型加奇怪动作、反而穿帮；锁道具靠"一个清楚的全貌镜头"就够
+   - **鞋写 `cloth shoes`（布鞋），禁写 `liberation shoes`**——直译词会被模型渲染成奇怪的靴子
    - **有声音卡时**追加一行：`<Audio 1> is the voice-timbre reference for <Subject N> (S1).`
 2. **`summary`**：一段英文，**以方括号任务类型开头**，只用 `[reference generation]`（有参考图但不以某图为具体帧/被编辑视频时）。官方任务类型表：`keyframe completion`（图当首帧/关键帧/尾帧）/`reference generation`（图或音只提供参考）/`video editing` / `video continuation` / `audio reuse` / `audio reference`。多种关系用 ` + ` 连接
 3. **`retention_analysis`**：每个标签一行。官方固定英文关系词只能取这几个：`fully_preserved` / `partially_preserved` / `attribute_transfer` / `weak_reference`。格式 `<Subject 1> (appears in [Shot 1], [Shot 2]): fully_preserved - <保住了什么>`
@@ -71,10 +75,13 @@ non_diegetic_music:
    - **`retention_analysis` 里严禁出现 `(S1)` 这类说话人编号**（官方原文：*Do not write `(Sx)` in `retention_analysis`.*）
 4. **`detailed_description`**：正文主体。
    - **`[Shot 1]` 不加时间戳**；后续镜头写 `[Shot 2] At 00:06.000, ...`（官方格式 `[Shot N] At MM:SS.mmm, ...`）
-   - **风格句写在 `[Shot 1]` 之前、单独一两句**（这是官方与 T2VA 的差异点：T2VA 写在 Shot1 之后）
+   - **风格句写在 `[Shot 1]` 之前、单独一两句**（这是官方与 T2VA 的差异点：T2VA 写在 Shot1 之后）。**全局光线/曝光一致性只在风格句里交代一次**，写成 `consistent exposure and white balance throughout, no new light source` 这种一句带过；**严禁在每个 `[Shot N]` 里复读 `Same exposure, same white balance, no new light source`**——官方 Ref2VA 指南全文没有这句话（实测 0 命中），每拍复读纯烧 token 还稀释真正有用的画面细节（2026-10-09 用户确认要删）
    - **主体首次清晰出现时，描述它的外观特征、在画面中的位置和当前动作**；后续镜头继续用同一个 `<Subject N>`，**不要重复定义它是什么**
    - 说话人：`<Subject N> (S1)`；**画外音/旁白保留同形式并加 `off-screen`**（官方原文：*If the same subject speaks off-screen, keep the same form and mark it as `off-screen`.*）
-   - 台词只写 `<Subject N> (S1) says, <d>[Chinese] 台词原文</d>` 或 `Narration (S1) off-screen: <d>[Chinese] 原文</d>`；**台词中文必须逐字取自分镜 description 原文，禁止改写、禁止自己编**
+   - **🔴 旁白/画外音的说话人不要绑在画面里的 `<Subject N>` 上**：写 `<Subject 2> (S1) says off-screen` 会被模型渲染成"屏幕上一个人 + 另一个人在说话"= 双人（2026-10-09 实测复现）。正确写法是官方给的另一种：**用稳定的嗓音描述 + `(Sx)`**，如 `A young woman's low restrained voice (S1) speaks off-screen: <d>[Chinese] 原文</d>`
+   - **画外音那一拍，在场人物必须锁嘴**：官方示例原句 `She closes her lips` / `his lips remain completely closed`。写 `<Subject 2>` 在场时紧跟 `her lips stay closed, she does not speak on screen`——否则模型让画面里的人物张嘴对口型（项目 2026-10-08 实测踩过，英文版必须继承这条）
+   - 台词只写 `<d>[Chinese] 台词原文</d>`；**台词中文必须逐字取自分镜 description 原文，禁止改写、禁止自己编**
+   - **🔴 台词只许整句删，不许截断或改写（2026-10-09 实测）**：`「这个日子我认得。前世我进厂也是这天，撞见了张建国。」` 被写成 `「这个日子我认得。」` + `「前世我进厂也是这天。」`，**「撞见了张建国」整个剧情爆点被悄悄吞掉**。正确做法：一句里塞不下就**整句删掉**，绝不允许把一句话砍一半或拆成两句改写；删句必须在**中文工作版**里显式标注（如 `（本段未采用：撞见了张建国。——原因：10秒装不下）`），让用户看得见删了什么，删错了才好用**补充说明**指回来
    - 画面内可见文字保留中文原文（如招牌、纸面文字）
    - 生成类任务正文 **350–500 英文词**；台词密集时以"完整说完"优先，不要为凑词数硬灌
 5. **`overall_soundscape`**：整段环境音与物理声（英文）。**没有台词/旁白的镜头必须在此写死无人声**，官方口径：安静镜头冒出没要求的人声 → 把音频字段写明再重跑。写 `(No human voice in this segment except the dialogue lines explicitly written below; no narration, no humming, no singing.)`
@@ -82,4 +89,4 @@ non_diegetic_music:
 
 **编号一致性（硬性）**：`<Subject N>` / `<Picture N>` / `<Audio J>` 与 `(Sx)` 四套编号各自独立计数，但 `<Audio J>` 绑定的 `<Subject N>` 与说话人 `(Sx)` 必须同号对应。
 
-**收尾自检（保存前逐项核）**：六段名齐全且顺序对 / `subject_definitions` 每行都有 `<Picture N>` 且带 `with` 外观 / `retention_analysis` 无 `(Sx)` / 台词全在 `<d>[Chinese]` 里且逐字来自 description / 画外音标了 `off-screen` / 正文英文（除 `<d>` 与画面文字）
+**收尾自检（保存前逐项核）**：六段名齐全且顺序对 / `subject_definitions` 每行都有 `<Picture N>` 且带 `with` 外观 / `retention_analysis` 无 `(Sx)` / 台词**全句**逐字来自 description（无截断改写，删句已标注）/ 旁白说话人用嗓音描述而非 `<Subject N>`、在场人物写了锁嘴 / `Same exposure...` 只在风格句出现一次（没每拍复读）/ 正文英文（除 `<d>` 与画面文字）

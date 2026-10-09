@@ -76,7 +76,7 @@ What the body SHOULD contain:
 
 - Scene environment and lighting (may reference the scene asset, no fresh version per segment)
 - Camera position, shot size, movement; character actions and performance; plot beats; dialogue/narration; ambience
-- The `same exposure, same white balance, no new light source` lock; cuts
+- Exposure consistency: **once in the style sentence** (the one or two sentences before `[Shot 1]`: "consistent exposure and white balance throughout, no new light source"), **never repeated per shot** (wastes tokens, dilutes attention); cuts
 
 What the body must NOT contain:
 
@@ -160,8 +160,12 @@ non_diegetic_music:
 
 1. **`subject_definitions`** — one line per tracked subject, **always `<Subject N> is the <category> in <Picture N>, with <appearance features>`**
    - Official example: `<Subject 1> is the young woman in <Picture 1>, with long dark hair, a blue cardigan, and a thin silver necklace.`
-   - **After `with`, name the visible appearance item by item**: face shape / hairstyle (length + colour) / garment style and colour / accessories / notable wear. **Source it from the asset's `appearance`/`styling`/`description`/`prompt`/`location` fields rewritten into English — never omit, never invent a different set**
+   - **🔴 `<Picture N>` follows the ACTUAL reference-image order, not appearance order**: this pipeline's reference order is fixed as **scene = image 1 → characters = images 2..N → props last** (same index as `@图片N` and the slot `mod_N`). With 3 reference images: `<Picture 1>` = the scene, `<Picture 2>` = Lin Qiao, `<Picture 3>` = the form. **Never number by "whoever appears first"** — a shifted index binds `<Subject N>` to the wrong `mod_N` card (the scene card becomes the identity card = the face drifts)
+   - **The scene also needs its own `<Subject N>`**: `<Subject 1> is the scene in <Picture 1>, with ...`. Omitting the scene means it takes neither card nor reference image
+   - After `with`, **name the visible appearance item by item**: face shape / hairstyle (length + colour) / garment style and colour / accessories / notable wear. **Source it from the asset's `appearance`/`styling`/`description`/`prompt`/`location` fields rewritten into English — never omit, never invent**
    - **An image that only defines a subject and never acts as a frame anchor gets no standalone `<Picture N>` line** — cite it inside the `<Subject N>` definition (official: *If an image is used only to define a character, scene, costume, or style, do not create a standalone picture entry.*)
+   - **Write `cloth shoes`, never `liberation shoes`** — the literal translation renders as odd boots
+   - **A prop needs at least one "clear full-view" shot (measured 2026-10-09)**: if a `<Subject N>` is only ever "clutched in hand / folded away / tucked into a pocket", there is nothing in frame to lock and the model invents it → the prop is always lost. Give it at least one shot where it appears **complete, facing the camera, not largely hidden by a hand** (e.g. `the form lies flat, fully visible facing the camera`). **But do not put every object in front of the camera to lock it** — that forces strange extra actions and creates more artifacts; one clear full-view shot is enough to lock a prop
    - With a voice card, add `<Audio 1> is the voice-timbre reference for <Subject N> (S1).`
 2. **`summary`** — one English paragraph **opening with a bracketed task type**; this pipeline always uses `[reference generation]` (references guide generation without serving as a first frame/keyframe and without being an edited or continued source video). Official types: `keyframe completion` / `reference generation` / `video editing` / `video continuation` / `audio reuse` / `audio reference`; combine with ` + `
 3. **`retention_analysis`** — one line per label; markers only `fully_preserved` / `partially_preserved` / `attribute_transfer` / `weak_reference`
@@ -171,11 +175,15 @@ non_diegetic_music:
    - **`[Shot 1]` carries no timestamp**; later shots use `[Shot 2] At 00:06.000, ...`
    - **The style sentence goes BEFORE `[Shot 1]` as one or two standalone sentences** (T2VA puts it after Shot 1; Ref2VA puts it before — an official difference)
    - At a subject's **first clear appearance**, describe its features, position in frame, and current action; later shots reuse the same `<Subject N>` **without redefining it**
-   - Speakers: `<Subject N> (S1)`; **off-screen voice/narration is marked `off-screen`** (official: *If the same subject speaks off-screen, keep the same form and mark it as `off-screen`.*)
+   - On-screen dialogue speaker: `<Subject N> (S1)` (that shot must actually have that subject present and speaking)
+   - **🔴 Never bind the off-screen narration speaker to an on-screen `<Subject N>`**: writing `<Subject 2> (S1) says off-screen` gets rendered as "one person on screen plus another person talking" = a duplicated character (reproduced 2026-10-09). Use the official alternative instead: **a stable voice description followed by `(Sx)`**, e.g. `A young woman's low restrained voice (S1) speaks off-screen: <d>[Chinese] original line</d>`, still marked `off-screen`
+   - **If a subject is on screen during the narration shot, lock the lips**: the official example literally reads `She closes her lips` / `his lips remain completely closed`. Write `her lips stay closed, she does not speak on screen` — otherwise the model lip-syncs the on-screen figure to the narration (hit 2026-10-08; the English version must inherit this)
+   - **`retention_analysis` never contains `(Sx)`** (speaker numbers appear only in `detailed_description`)
    - Dialogue only as `<d>[Chinese] original line</d>`, **copied verbatim from the storyboard description — never paraphrase or invent**
+   - **🔴 Drop whole sentences only — never truncate or reword (measured 2026-10-09)**: cutting one line into two, or deleting half of it, silently swallows plot (measured: `撞见了张建国` vanished entirely). If it does not fit, **drop the whole sentence**; every dropped sentence must be **explicitly marked in the Chinese working version** (e.g. `（本段未采用：XX句——原因：10秒装不下）`) so the user can see it
    - Text visible in frame keeps its original Chinese
    - Generation bodies run **350-500 English words**
 5. **`overall_soundscape`** — ambience (English); shots without dialogue state no human voice: `(No human voice in this segment except the dialogue lines explicitly written below; no narration, no humming, no singing.)`
 6. **`non_diegetic_music`** — score audible only to the audience; `N/A` when absent
 
-**Self-check before saving**: six sections present and in order / every `subject_definitions` line has `<Picture N>` plus a `with` clause / `retention_analysis` contains no `(Sx)` / all dialogue inside `<d>[Chinese]` and verbatim from the description / off-screen narration marked `off-screen` / body is English except `<d>` and on-screen text
+**Self-check before saving**: six sections present and in order / every `subject_definitions` line has `<Picture N>` plus a `with` clause / `retention_analysis` contains no `(Sx)` / all dialogue copied **as whole sentences** verbatim from the description (no truncation, no rewording; dropped sentences marked) / narration speaker uses a voice description not `<Subject N>` and the on-screen subject has its lips locked / `Same exposure...` appears once in the style sentence only (not repeated per shot) / body is English except `<d>` and on-screen text

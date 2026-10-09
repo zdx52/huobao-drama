@@ -3120,13 +3120,17 @@ async function setAsMainVideo() {
   } catch (e) { toastError(e, { fallback: 'episode.vid.setMainFailed' }) }
 }
 
-async function removeHistoryVideo(t) {
+// 2026-10-09：参数名必须避开 i18n 的 `t`——原写法 `removeHistoryVideo(t)` 把组件级
+// `const { t } = useI18n()` 遮蔽了，导致 `t('episode.vid.historyDeleted')` 变成"把记录对象当函数调"
+// → TypeError → 掉进 catch → 弹「删除失败」。而前面的 `taskAPI.del` 和本地 filter 都已执行完，
+// 所以表现为：视频消失了、后端确实删了、却提示删除失败。（模板里传进来的就叫 `h`，与之对齐）
+async function removeHistoryVideo(h) {
   try {
-    await taskAPI.del(t.id)
-    sbVideoHistory.value = sbVideoHistory.value.filter(x => x.id !== t.id)
-    if (previewVideoUrl.value === taskVideoPath(t)) previewVideoUrl.value = ''
-    toast.success(t('episode.vid.historyDeleted'))
-  } catch (e) { toastError(e, { fallback: 'common.deleteFailed' }) }
+    await taskAPI.del(h.id)
+    sbVideoHistory.value = sbVideoHistory.value.filter(x => x.id !== h.id)
+    if (previewVideoUrl.value === taskVideoPath(h)) previewVideoUrl.value = ''
+  } catch (e) { toastError(e, { fallback: 'common.deleteFailed' }); return }
+  toast.success(t('episode.vid.historyDeleted'))
 }
 
 function formatHistoryTime(iso) {

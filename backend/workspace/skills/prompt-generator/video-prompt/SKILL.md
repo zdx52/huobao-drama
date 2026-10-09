@@ -79,7 +79,7 @@ description: 视频提示词规范 — 根据分镜段落内容生成按时间�
 
 - 场景环境与光线（可引用场景资产要点，不要另写一套）
 - 机位、景别、运动；人物动作与表演；情节推进；台词/旁白；音景
-- `same exposure, same white balance, no new light source` 曝光锁；切镜
+- 曝光一致性：**只在风格句里写一次**（`[Shot 1]` 之前那一两句带上 consistent exposure and white balance throughout, no new light source），**禁止每拍复读** `same exposure...`（白烧 token、稀释注意力）；切镜
 
 正文不该写的：
 
@@ -162,8 +162,12 @@ non_diegetic_music:
 
 1. **`subject_definitions`** — 每个出场主体一行，**必须是 `<Subject N> is the <类别> in <Picture N>, with <外观特征>`**
    - 官方示例原文：`<Subject 1> is the young woman in <Picture 1>, with long dark hair, a blue cardigan, and a thin silver necklace.`
+   - **🔴 `<Picture N>` 编号 = 参考图实际顺序，不是出场顺序**：本管线参考图顺序固定为 **场景第 1 张 → 角色第 2..N 张 → 道具最后**（与 `@图片N` 注入顺序、卡槽 `mod_N` 三者同号）。3 张图时：`<Picture 1>` = 场景、`<Picture 2>` = 林巧、`<Picture 3>` = 报到单。**不许按"谁先出场就从 1 编起"**——编号错位会让 `<Subject N>` 对上错误的 `mod_N` 卡（场景卡被当成身份卡 = 脸必漂）
+   - **场景也必须有 `<Subject N>`**：`<Subject 1> is the scene in <Picture 1>, with ...`。漏掉场景 = 场景不吃卡、不吃参考图
    - **`with` 后面把可见外观逐个点名**：脸型 / 发型（长度+颜色）/ 服装款式颜色 / 配饰 / 显著磨损。**外貌原文取自资产 `appearance`/`styling`/`description`/`prompt`/`location` 字段转写英文，不得省略、不得另编**
    - **只用于定义主体、不当帧锚点的图，不要给它独立 `<Picture N>` 行**，只在 `<Subject N>` 定义里引用（官方：*If an image is used only to define a character, scene, costume, or style, do not create a standalone picture entry.*）
+   - **鞋写 `cloth shoes`（布鞋），禁写 `liberation shoes`**——直译词会被模型渲染成奇怪的靴子
+   - **道具必须至少有一个"能看清全貌"的镜头（2026-10-09 实测）**：如果 `<Subject N>` 全程只是"被攥在手里 / 被折起来 / 塞进口袋"，画面里就没有可锁定的载体，模型会按自己脑补画 → 成片道具必丢。至少给一拍让它**完整、正对镜头、不被人手大面积遮挡**地出现（如 `the form lies flat, fully visible facing the camera`）。**但不要为了锁道具把每个对象都摆到镜头前**——那会逼模型加奇怪动作、反而穿帮；锁道具靠"一个清楚的全貌镜头"就够
    - 有声音卡时加一行 `<Audio 1> is the voice-timbre reference for <Subject N> (S1).`
 2. **`summary`** — 一段英文，**以方括号任务类型开头**；本管线统一用 `[reference generation]`（有参考图但不以某图为首帧/关键帧、也不是编辑或续拍源视频时）。官方类型表：`keyframe completion` / `reference generation` / `video editing` / `video continuation` / `audio reuse` / `audio reference`，多关系用 ` + `
 3. **`retention_analysis`** — 每个标签一行，关系词只能用 `fully_preserved` / `partially_preserved` / `attribute_transfer` / `weak_reference`
@@ -173,11 +177,15 @@ non_diegetic_music:
    - **`[Shot 1]` 不加时间戳**，后续镜头 `[Shot 2] At 00:06.000, ...`
    - **风格句写在 `[Shot 1]` 之前、单独一两句**（T2VA 写在 Shot1 之后，Ref2VA 写在之前——这是官方差异点）
    - 主体**首次清晰出现时**描述外观特征 + 画面位置 + 当前动作；后续镜头沿用同一 `<Subject N>`，**不重复定义**
-   - 说话人 `<Subject N> (S1)`；**画外音/旁白加 `off-screen`**（官方：*If the same subject speaks off-screen, keep the same form and mark it as `off-screen`.*）
+   - 对白说话人 `<Subject N> (S1)`（该拍人物必须在场、且是真正在说话）
+   - **🔴 旁白/画外音的说话人不能绑在画面里的 `<Subject N>` 上**：写 `<Subject 2> (S1) says off-screen` 会被模型渲染成"屏幕上一个人 + 另一个人在说话"= 双人穿帮（2026-10-09 实测复现）。改用官方给的另一条路：**稳定嗓音描述 + `(Sx)`**，如 `A young woman's low restrained voice (S1) speaks off-screen: <d>[Chinese] 原文</d>`，同时标 `off-screen`
+   - **画外音那一拍若画面里有人物，必须锁嘴**：官方示例原句 `She closes her lips` / `his lips remain completely closed`。写 `her lips stay closed, she does not speak on screen`——否则模型让画面里的人张嘴对口型旁白（2026-10-08 踩过，英文版必须继承）
+   - **`retention_analysis` 里一律不出现 `(Sx)`**（说话人编号只在 `detailed_description` 出现）
    - 台词只写 `<d>[Chinese] 原文</d>`，**中文逐字取自分镜 description，禁止改写或自编**
+   - **🔴 台词只许整句删，不许截断或改写（2026-10-09 实测）**：把一句台词砍成两句、或删掉半句，会悄悄吞掉剧情（实测「撞见了张建国」被整段抹掉）。塞不下就**整句删**；删句必须在中文工作版显式标注（如 `（本段未采用：XX句——原因：10秒装不下）`），让用户看得见
    - 画面内可见文字保留中文原文
    - 生成类正文 **350–500 英文词**
 5. **`overall_soundscape`** — 环境音（英文）；无台词镜头写死无人声明 `(No human voice in this segment except the dialogue lines explicitly written below; no narration, no humming, no singing.)`
 6. **`non_diegetic_music`** — 观众才能听到的配乐；无则 `N/A`
 
-**保存前自检**：六段名齐全且顺序对 / 每行 `subject_definitions` 都有 `<Picture N>` + `with` 外观 / `retention_analysis` 无 `(Sx)` / 台词全在 `<d>[Chinese]` 且逐字来自 description / 画外音标了 `off-screen` / 正文英文（除 `<d>` 与画面文字）
+**保存前自检**：六段名齐全且顺序对 / 每行 `subject_definitions` 都有 `<Picture N>` + `with` 外观 / `retention_analysis` 无 `(Sx)` / 台词**全句**逐字来自 description（无截断改写，删句已标注）/ 旁白说话人用嗓音描述而非 `<Subject N>` 且在场人物写了锁嘴 / `Same exposure...` 只在风格句出现一次（没每拍复读）/ 正文英文（除 `<d>` 与画面文字）
