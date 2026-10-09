@@ -66,12 +66,18 @@ non_diegetic_music:
    - **若某张图只是用来定义某个主体、不会单独当帧锚点，就不要给它独立的 `<Picture N>` 行，只在 `<Subject N>` 定义里引用**（官方原文：*If an image is used only to define a character, scene, costume, or style, do not create a standalone picture entry.*）
    - `with` 后面必须**把该主体的可见外观逐个点名**：脸型/发型（含长度颜色）/服装款式颜色/配饰/显著磨损。**外貌原文取自资产的 `appearance`/`styling`/`description`/`prompt`/`location` 字段，转写成英文，不得省略、不得自己另编一套**
    - 道具同样要有 `<Subject N>`：`<Subject 3> is the registration form in <Picture 3>, with ...`
-   - **道具必须至少有一个"能看清全貌"的镜头，但靠机位不靠角色举（2026-10-09 两轮实测定稿）**：
+   - **道具必须至少有一个"能看清全貌"的镜头，但靠机位不靠角色举（2026-10-09 三轮实测定稿）**：
      - **为什么需要**：如果 `<Subject N>` 全程只是"被攥在手里 / 被折起来 / 塞进口袋"，画面里没有可锁定的载体，模型会脑补 → 道具必丢。
-     - **🔴 怎么给：禁止写 `facing the camera` / `toward the camera` / `presented to the viewer`** —— 这些词会让模型把道具/肢体**正对观众展示**，成片就是"角色举着报到单给观众看"，非常出戏（2026-10-09 实测复现，用户明确否掉）。**让道具入画靠机位**：俯拍（high-angle / overhead）、过肩（over her shoulder）、镜头在手的斜上方（camera looks down at the form in her hands）。**并且角色视线必须落在道具上**（`her gaze down on the form`）—— 是"她在看"，不是"给观众看"。
-     - **🔴 不许自己加镜头**：剧本 description 里没写的道具镜头，一个都不许补。剧本写"她低头盯住那张纸"就照抄她低头看；剧本那拍只有手掌，就不许把报到单塞进去（2026-10-09 实测：146 镜头1 剧本只有掌心，LLM 自己加了报到单平铺朝镜头）。
-     - **反例（禁用）**：`the form lying flat and fully visible facing the camera` ❌
-     - **正例**：`the camera looks down at the form lying open in her hands, her gaze fixed on the paper` ✅
+     - **🔴 怎么给：禁止写 `facing the camera` / `toward the camera` / `presented to the viewer`** —— 这些词会让模型把道具/肢体**正对观众展示**，成片就是"角色举着道具给观众看"，非常出戏（2026-10-09 实测复现，用户明确否掉）。
+     - **🔴🔴 同时禁止"俯拍 + 平摊"这个组合（2026-10-09 第三轮实测，几何必然）**：`settles high above them, looking down at the form lying open in her palms` 这种写法，**镜头在正上方 + 纸平摊在掌心 = 纸面正对镜头**，而且从镜头看纸顶的文字是**上下颠倒**的 —— 成片就是"角色倒着拿给观众看"。**俯拍不是解法，是新坑。**
+     - **✅ 正确姿势（三条同时满足）**：
+       ① **机位取侧向/斜上方，不要正上方**：`the camera at a low three-quarter angle beside her hands`、`over her shoulder, from her side`
+       ② **道具的印刷面朝向角色自己，背对镜头**：`the printed side turned toward her, away from the lens`、`the text facing her, the blank back toward the camera`
+       ③ **道具要有透视角度，不许平摊正对**：`the form held at an angle in her hands`，禁止 `lying flat` / `lying open` / `flat against her palms`
+     - **🔴 道具数量必须显式锁死（防止复制成两张）**：正文里至少写一次 `a single sheet, exactly one form in her hands, never duplicated`；`retention_analysis` 里加 `only one form, never duplicated`。**只在 subject_definitions 写 `single` 不够**——2026-10-09 实测：定义里写了 `a single white paper slip`，成片后半段照样变成两张上下压着（`lying open` 被画成摊开的多张）
+     - **🔴 不许自己加镜头**：剧本 description 里没写的道具镜头，一个都不许补（2026-10-09 实测：146 镜头1 剧本只有掌心，LLM 自己加了报到单平铺朝镜头）。
+     - **反例（全部禁用）**：`the form lying flat and fully visible facing the camera` ❌ / `settles high above them, looking down at the form lying open in her palms` ❌
+     - **正例**：`the camera at a low three-quarter angle beside her hands, the printed side of the single form turned toward her and away from the lens, held at an angle, her gaze down on the paper` ✅
    - **鞋写 `cloth shoes`（布鞋），禁写 `liberation shoes`**——直译词会被模型渲染成奇怪的靴子
    - **有声音卡时**追加一行 `<Audio 1>`。**声音卡是音色参考；画外音没有单独的参考音源，所以旁白必须指定画面里某个角色当旁白者**（一般就是主角自己）：
      - 本段**有旁白/画外音** → `<Audio 1> is the voice-timbre reference for <Subject N>'s off-screen narration (S1); use it only as a timbre reference and do not reproduce its words.`
@@ -85,6 +91,15 @@ non_diegetic_music:
    - **`retention_analysis` 里严禁出现 `(S1)` 这类说话人编号**（官方原文：*Do not write `(Sx)` in `retention_analysis`.*）
 4. **`detailed_description`**：正文主体。
    - **`[Shot 1]` 不加时间戳**；后续镜头写 `[Shot 2] At 00:06.000, ...`（官方格式 `[Shot N] At MM:SS.mmm, ...`）
+   - **🔴 CAST + BLOCKING 两段（2026-10-09 立，官方要求写 position/placement 但我们一直欠着）**：**放在风格句之前、`[Shot 1]` 之前**，`detailed_description` 的最前面。**不许新增顶层段名**——六段格式不能动，这两段是 `detailed_description` 内部的开头。
+     - **CAST（治多脸 / 道具复制成两张）**：点名本段有几个人、几件道具，然后写死数量与"不许重复"：
+       `CAST: exactly one young woman, one registration form, one factory gate; no twins, no duplicated figures, no extra people, no second copy of the form, no duplicated wardrobe.`
+       **这比在 `subject_definitions` 写 `single` 强得多**——2026-10-09 实测：定义里写了 `a single white paper slip`，成片后半段照样变成两张上下压着。
+     - **BLOCKING（治站位漂移 / 朝向乱 / 道具倒持）**：写死谁在哪、道具朝哪、镜头在哪一侧、**轴线在哪**：
+       `BLOCKING: the woman stands centre-frame, the factory gate behind her; the form held in both hands at waist height, its printed side turned toward her and away from the lens. The camera stays on her side of the hands; the 180 axis runs through her hands and is never crossed.`
+       **180 度轴线（the 180 axis）是电影百年行规**：机位一旦越过轴线，观众就分不清方位、道具朝向也会反 —— 2026-10-09 实测的"报到单倒着拿给观众看"就是没有轴线约束、每拍机位自由乱选的结果。
+     - **参考写法（higgsfield 的成熟示例，逐字结构）**：`BLOCKING: Fire foreground center, x50 y74, blurred. Group in a semicircle beyond it, 1.5 m from flames. Camera stays on one side of the fire; the 180 axis runs through the fire and is never crossed. P3 and P4 stay screen-left looking camera-right.`
+     - **⚠️ 但不要照抄坐标**：H3 不是 Veo，`x50 y74` 这类像素坐标对 H3 无效。H3 要的是**文字描述的相对位置**：`centre-frame` / `screen-left looking camera-right` / `behind her` / `at waist height` / `1.5 m from her`。
    - **风格句写在 `[Shot 1]` 之前、单独一两句**（这是官方与 T2VA 的差异点：T2VA 写在 Shot1 之后）。**全局光线/曝光一致性只在风格句里交代一次**，写成 `consistent exposure and white balance throughout, no new light source` 这种一句带过；**严禁在每个 `[Shot N]` 里复读 `Same exposure, same white balance, no new light source`**——官方 Ref2VA 指南全文没有这句话（实测 0 命中），每拍复读纯烧 token 还稀释真正有用的画面细节（2026-10-09 用户确认要删）
    - **主体首次清晰出现时，描述它的外观特征、在画面中的位置和当前动作**；后续镜头继续用同一个 `<Subject N>`，**不要重复定义它是什么**
    - **说话人只有一种写法**（2026-10-09 立，取代此前所有旧写法）：
@@ -93,6 +108,11 @@ non_diegetic_music:
      - **旁白者必须指定为画面里某个角色**（一般就是主角自己）——画外音没有独立参考音源，不指定旁白者 = 模型自己编一个声音
      - **🔴 禁用这两种写法**（都会让模型把说话动作挂到画面里的人身上，导致嘴动/双人）：① `<Subject 2> (S1) says off-screen` ② `A young woman's low restrained voice (S1) speaks off-screen`（嗓音描述式 = 没指定旁白者，2026-10-09 实测复现）
    - **🔴 锁嘴必须与台词同句**（不能隔动作描写）：官方示例原句 `She closes her lips`。锁嘴必须**直接贴在 `<d>` 前或后**，中间不得插入任何动作/画面描写（2026-10-09 实测：锁嘴写在拍子开头、台词在末尾，中间隔了三个动作从句 → 模型照样让嘴动）
+   - **🔴🔴 画外音那一拍，画面里不得出现说话人的正脸（硬性，优先级高于以上所有锁嘴写法）**：
+     - **为什么**：视频模型有强先验「画面里有人脸 + 有台词 = 这个人在说话」。锁嘴是文字约束，**压不住这个先验**——2026-10-09 实测：锁嘴与台词同句、voice-over 指定角色、声音卡绑旁白音色，三样全做对了，5-9 秒那两拍**照样让她张嘴念出来**。**唯一的解法是不露脸**：没有"谁在说话"的视觉锚点，模型才会当作画外音。
+     - **画外音拍只能用这三种镜头**：① **手部特写**（只拍手 + 道具，`extreme close-up of her hands holding the form`）② **背影/过肩**（`from behind, the back of her head`, `over her shoulder`）③ **空镜**（场景或道具单独，`the form lies open on the workbench`）
+     - **🔴 禁止**：画外音拍写任何让正脸入画的机位（`close-up of her face` / `high-angle close-up: <Subject 2> lowers her head` 这类**脸可见**的写法）
+     - **项目 2026-10-08 就立过这条**（"凡画外音拖尾所覆盖的段落均不得露出人物正脸"），**双语化改造时丢了**，2026-10-09 复现 → 现在补回
    - 台词只写 `<d>[Chinese] 台词原文</d>`；**台词中文必须逐字取自分镜 description 原文，禁止改写、禁止自己编**
    - **🔴 台词只许整句删，不许截断或改写（2026-10-09 实测）**：`「这个日子我认得。前世我进厂也是这天，撞见了张建国。」` 被写成 `「这个日子我认得。」` + `「前世我进厂也是这天。」`，**「撞见了张建国」整个剧情爆点被悄悄吞掉**。正确做法：一句里塞不下就**整句删掉**，绝不允许把一句话砍一半或拆成两句改写；删句必须在**中文工作版**里显式标注（如 `（本段未采用：撞见了张建国。——原因：10秒装不下）`），让用户看得见删了什么，删错了才好用**补充说明**指回来
    - 画面内可见文字保留中文原文（如招牌、纸面文字）
