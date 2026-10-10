@@ -5,10 +5,10 @@
  * 2026-10-10 长度治理的最终形态（前两版都失败，教训留在这里）：
  *  v1 全文一次写完 → Agent 不数字符数（sb147 写到 7823 仍以为没超）→ 拼上风格头 8414 → 被 7000 拒
  *  v2 逼 Agent「只输出本轮那几段」→ 与技能「六个段名固定、顺序固定」正面冲突，
- *     Agent 每轮照技能输出完整八段 → 每轮都超配额 → 全部重试失败 → 整条放弃、不落库
+ *     Agent 每轮照技能输出完整六段 → 每轮都超配额 → 全部重试失败 → 整条放弃、不落库
  *     （表现：用户点了重新生成，但库里的英文版一字未改，测试还照旧报 8414）
  *  v3（本版）不与 Agent 的固有行为较劲：
- *     ① 第 1 轮照技能写**完整八段**（这本来就是它最自然的输出）
+ *     ① 第 1 轮照技能写**完整六段**（这本来就是它最自然的输出）
  *     ② 后端按段名切段、逐组实测
  *     ③ **只对超标的那一组**下发「压缩这一组」的重写，并容错抽取
  *        （Agent 若又输出全文，后端只取那几段，不判失败）
@@ -147,7 +147,8 @@ function zhEnConsistency(enText: string, zhPrompt?: string): string | null {
     return `英文版每拍起始秒数 [${enStarts.join(',')}] 与中文工作版 [${zhStarts.join(',')}] 不一致；英文第 2 拍起应依次为 [${expect.join(',')}]`
   }
   // ③ 台词条数一致：中文「旁白/X说：「…」」句数 = 英文 <d> 条数
-  const zhLines = (zhPrompt.match(/(?:旁白|说)[^「\n]{0,30}「/g) || []).length
+  // 2026-10-10 修：补「画外音」，此前三种合法写法里漏了一种 → 中文有画外音、英文漏 <d> 也能过检
+  const zhLines = (zhPrompt.match(/(?:旁白|画外音|说)[^「\n]{0,30}「/g) || []).length
   const enLines = (enText.match(/<d>/g) || []).length
   if (zhLines !== enLines) {
     return `中英台词条数不一致：中文工作版 ${zhLines} 句，英文版 <d> ${enLines} 条（必须逐条对应，一句不多一句不少）`
@@ -155,7 +156,7 @@ function zhEnConsistency(enText: string, zhPrompt?: string): string | null {
   return null
 }
 
-/** 第 1 轮指令：照技能写完整八段（与技能「六段固定、顺序固定」一致，不冲突）。
+/** 第 1 轮指令：照技能写完整六段（与技能「六段固定、顺序固定」一致，不冲突）。
  *  ⚠️ 关键设计：**给"目标长度"而不是只给"上限"** —— 实测 Agent 对"≤6200"无感
  *  （写成 7746 仍以为没问题），但对"这段约 1500 字符"有明确落点，一次就能写到位。
  *  目标值取配额的 ~80%，合计约 4900，远低于硬上限，留足余量、也避免回头压缩（压缩要重跑，很慢）。 */
@@ -168,7 +169,7 @@ function buildFullPrompt(sb: { id: number; storyboardNumber: number | null }, vi
   const zhTimeline = zhPrompt
     ? (zhPrompt.match(/^\s*\d+\s*-\s*\d+\s*秒[：:].*$/gm) || []).join('\n')
     : ''
-  return `请为分镜 #${sb.storyboardNumber}(ID:${sb.id})生成视频提示词 video_prompt_en（H3 官方 Ref2VA 六段式 + 前置 CAST/BLOCKING）。视频模型:${videoLabel}。
+  return `请为分镜 #${sb.storyboardNumber}(ID:${sb.id})生成视频提示词 video_prompt_en（H3 官方 Ref2VA 六段式）。视频模型:${videoLabel}。
 
 请先调用 read_storyboard_context 获取该分镜的画面描述(含【镜头N】子镜头与台词/旁白)、氛围及时长；格式与规则见 video-prompt 技能「英文发送版」节。
 
@@ -178,7 +179,7 @@ function buildFullPrompt(sb: { id: number; storyboardNumber: number | null }, vi
 - **硬上限 6200 字符**：写入时后端会校验，超了直接拒绝并要求重写。MiniMax H3 上限 7000，发送时还要拼 591 字符风格头。
 - **宁可精炼**：每段只说必要的，形容词能省则省，但必须保住下面这些不许砍的内容。
 
-绝不许为了压长度而砍：<d> 台词、retention_analysis 的 fully_preserved、<Picture N> 的 with 外观、CAST 数量锁、BLOCKING 的 180 轴线。
+绝不许为了压长度而砍：<d> 台词、retention_analysis 的 fully_preserved、<Picture N> 的 with 外观。
 ${zhTimeline ? `
 🔴🔴 **时间轴基准（本次中文工作版已定，必须逐拍对齐，绝不许自己另算）**：
 中文工作版每一拍的起止秒数如下 —— 英文版第 N 拍的 \`[Shot N] At MM:SS.mmm\` **起始秒数必须与中文第 N 拍的起点逐拍一致**（例：中文第 2 拍 \`2-5秒\` → 英文 \`[Shot 2] At 00:02.000\`；中文第 3 拍 \`5-8秒\` → 英文 \`[Shot 3] At 00:05.000\`）。第 1 拍不带时间戳。**中文版改了时间轴，英文版就必须跟着改。**
@@ -214,7 +215,7 @@ function buildRewritePrompt(
 
 **怎么压（照做，这些都是安全的）**：
 1. 删修饰性形容词与程度词：\`wind-and-oil weathered wheat-toned skin\` → \`weathered skin\`；\`slightly\` / \`very\` / \`gently\` / \`faintly\` 一律删
-2. 同一件事只说一遍：BLOCKING 里写过的站位与朝向，detailed_description 里不再重复
+2. 同一件事只说一遍：retention_analysis 说过的保留项，detailed_description 里不再复述外观细节；画面里同一动作只写一次
 3. \`subject_definitions\` 每个主体只留 5~6 个辨识特征（脸型 / 发型 / 服装主色 / 关键道具），其余删
 4. \`retention_analysis\` 每条压成一句话：\`<Subject N> (appears in ...): fully_preserved - <一句>\`，不要重述外观细节
 5. 镜头描述去掉氛围补充：\`soft modelling\`、\`light level unchanged\`、\`consistent exposure\` 这类删掉
@@ -225,8 +226,6 @@ function buildRewritePrompt(
 - <d>…</d> 里的台词原文（一个字都不能改）
 - 每个 Subject 的 fully_preserved 字样（retention 状态不能降级）
 - <Picture N> 编号（参考图绑定）
-- CAST 里的数量锁（exactly one / no duplicates 那几句）
-- BLOCKING 里的 180 轴线句
 - 主体编号与名称的对应关系
 ${zhTimeline ? `\n**🔴 时间轴必须与中文工作版逐拍一致（压缩时不许改动任何秒数）**：\n${zhTimeline}\n` : ''}
 ${extra ? `\n**压缩时仍必须继续满足补充说明**：${extra}\n` : ''}输出要求：**只压缩【${stage.label}】**并压到 ≤ ${stage.limit} 字符（组内逐段：${segQuota}）；输出这一组内容（保留段名行）；其他组不用输出；不要解释、前言、结语；不要代码块围栏；不要调用任何保存工具。
@@ -449,6 +448,7 @@ export async function startVideoPromptBatch(
       dramaId,
       modelOverride: opts.model || undefined,
       textConfigId: opts.configId || undefined,
+      promptTask: 'video',   // 只注入 video-prompt 技能（按需注入，2026-10-10）
     })
     for (const sb of pending) {
       task.current_storyboard_id = sb.id

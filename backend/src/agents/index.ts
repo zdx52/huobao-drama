@@ -365,7 +365,17 @@ function buildInstructions(type: string) {
     const lang = getContentLanguageFromRC(requestContext)
     const promptFile = await loadAgentPromptFile(type, lang)
     const baseInstructions = promptFile?.instructions || defaults.instructions
-    const skillInstructions = await loadAgentSkills(type, lang)
+    // 2026-10-10 按需注入：prompt_generator 同时管「图片提示词」与「视频提示词」两类任务，
+    // 但一次请求只做其中一类。旧行为把 4 个技能全文（92KB ≈3 万 tokens）全塞进去，
+    // 其中约 40% 与本次任务无关 —— 又慢、又把关键规则淹掉。现按 promptTask 只注入相关技能；
+    // 未标记（裸 Agent 聊天等）仍全量注入，保持旧行为不变。
+    const task = requestContext?.get('promptTask' as never) as 'image' | 'video' | undefined
+    const onlySkills = type !== 'prompt_generator' || !task
+      ? undefined
+      : task === 'video'
+        ? ['prompt-generator/video-prompt']
+        : ['prompt-generator/character-prompt', 'prompt-generator/scene-prompt', 'prompt-generator/prop-prompt']
+    const skillInstructions = await loadAgentSkills(type, lang, onlySkills)
     const languageDirective = buildLanguageDirective(lang)
     return [baseInstructions, skillInstructions, languageDirective]
       .filter(Boolean)

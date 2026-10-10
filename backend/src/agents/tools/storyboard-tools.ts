@@ -458,9 +458,9 @@ const updateStoryboard = createTool({
             `video_prompt_en 超长，已拒绝写入：当前 ${en.length} 字符，上限 ${PROMPT_EN_LIMIT} 字符。` +
             `MiniMax H3 的 prompt 上限是 7000 字符（官方 hard limit、不可放宽），后端发送时还会拼 591 字符风格头，` +
             `所以正文必须 ≤ ${PROMPT_EN_LIMIT}。请按 video-prompt 技能「英文发送版」节的逐段配额压缩后重新调用本工具：` +
-            `CAST ≤220 / BLOCKING ≤420 / subject_definitions ≤1850 / summary ≤380 / retention_analysis ≤820 / ` +
-            `detailed_description ≤2050 / overall_soundscape ≤330 / non_diegetic_music ≤50（合计 6120）。` +
-            `不许为了压长度而砍 <d> 台词、retention_analysis 的 fully_preserved、<Picture N> 的 with 外观、CAST 数量锁、BLOCKING 的 180 轴线。`,
+            `subject_definitions ≤1700 / summary ≤340 / retention_analysis ≤760 / ` +
+            `detailed_description ≤2500 / overall_soundscape ≤300 / non_diegetic_music ≤120（合计 5720）。` +
+            `不许为了压长度而砍 <d> 台词、retention_analysis 的 fully_preserved、<Picture N> 的 with 外观。`,
         }
       }
     }

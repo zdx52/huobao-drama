@@ -27,6 +27,7 @@ async function runPromptAgent(episodeId: number, dramaId: number, message: strin
     dramaId,
     modelOverride: opts?.model || undefined,
     textConfigId: opts?.configId || undefined,
+    promptTask: 'image',   // 只注入图片类技能（按需注入，2026-10-10）
   })
   await agent.generate([{ role: 'user', content: message }], { maxSteps: 12, requestContext })
 }

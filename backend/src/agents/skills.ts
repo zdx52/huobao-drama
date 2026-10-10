@@ -117,15 +117,18 @@ async function readLocalizedSkill(relPath: string, lang: string): Promise<string
 /** 读取 Agent 专属技能全文（经 workspace.skills API，保持原注入格式）
  *  AGENT_SKILL_MAP 的目录按前缀匹配：目录自身及其子目录下所有 SKILL.md 都会注入，
  *  因此设置页新建的子技能（如 storyboard-breaker/xxx）无需改代码即可生效。
- *  lang 非 zh 时逐技能优先 SKILL.<lang>.md，缺失回退基础版（中文） */
-export async function loadAgentSkills(agentType: string, lang?: string | null): Promise<string> {
+ *  lang 非 zh 时逐技能优先 SKILL.<lang>.md，缺失回退基础版（中文）
+ *  only 非空时只注入列表里的技能路径（按需注入，见 context.ts 的 promptTask） */
+export async function loadAgentSkills(agentType: string, lang?: string | null, only?: string[]): Promise<string> {
   const workspace = skillWorkspaces[agentType]
   const prefixes = AGENT_SKILL_MAP[agentType] || []
   if (!workspace || !prefixes.length) return ''
 
   const allPaths = scanSkillPaths().map(p => p.replace(/^skills\//, ''))
-  const relPaths = allPaths.filter(p =>
+  let relPaths = allPaths.filter(p =>
     prefixes.some(prefix => p === prefix || p.startsWith(prefix + '/')))
+  // 2026-10-10 按需注入：一次请求只用一类提示词，其余技能全文不再塞进上下文
+  if (only?.length) relPaths = relPaths.filter(p => only.includes(p))
 
   const useLocalized = Boolean(lang && lang !== 'zh')
   const contents: string[] = []

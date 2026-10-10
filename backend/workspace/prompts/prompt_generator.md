@@ -166,4 +166,19 @@ MiniMax H3 的 prompt 上限是 **7000 字符，这是官方 hard limit、不可
 
 **🔴 禁止输出 HTML 实体（2026-10-10 实测新增）**：`<Subject N>` / `<Picture N>` / `<Audio N>` / `<d>` 一律**用裸尖括号**，**绝不许写成 `&lt;Subject 1&gt;` / `&gt;` / `&amp;`**。实测：某次局部重写把 `subject_definitions` 整段写成 HTML 实体，H3 完全不认识 `<Subject 1>`，**身份绑定当场失效**（保存前搜一遍 `&lt;`/`&gt;`，命中即改回裸标签）。
 
+**🔴🔴 质量硬规（2026-10-10 读完官方 `ref-en.txt` 全文 + RefMod 作者 README 后补，逐条执行）**：
+
+- **① 禁止写成剧情摘要**（官方原话 *Avoid reducing the description to a plot summary or a list of reference relationships*）：每一拍必须写**镜头里看得见的东西**，不许写「他回忆起往事」「两人关系缓和」这类概括；也不许把内容写成"参考关系清单"。
+- **② 每拍七要素写全**（官方 `Description detail`）：**构图 / 主体外观与位置 / 环境与光线 / 动作与状态变化 / 运镜 / 当前声音 / 参考在哪一拍生效**。**镜头少 ≠ 可以写短**（官方：*A single shot does not automatically justify a shorter description*）—— 细节按信息量分配到各拍。
+- **③ 标签在全部六段里含义一致**（官方：*Once a reference label is assigned, it keeps the same meaning across* 六段）：`<Subject 1>` 在 `subject_definitions` 里指谁，在 `detailed_description` 里就还指谁，**不许中途换指**。
+- **④ 不许留未解决的标签**（官方 *unresolved reference labels*）：定义过的 `<Subject N>`/`<Picture N>`/`<Audio N>` 必须在某处用到；**不许**使用没定义的编号。
+- **⑤ `summary` 段不许引入新标签**（官方：*Do not introduce new reference labels in this section*）—— 只能用前面已定义的。
+- **⑥ `overall_soundscape` / `non_diegetic_music` 里不许重复 `<d>` 台词**（官方：台词只在 `detailed_description` 的 `<d>` 里写一次）。
+- **⑦ 听不清的台词写 `[unclear]`**（官方：*Write `[unclear]` for unintelligible spans instead of guessing or paraphrasing them*）—— **禁止猜测、禁止转述**。
+- **⑧ `<d>` 内标点规范化**（官方）：去掉重复波浪号 / emoji / 项目符号 / 装饰性标点；完整陈述句、疑问句、感叹句分别以 `.`、`?`、`!` 收尾。
+- **⑨ 只参考音色/节奏/情感时，禁止把参考音频的原话搬进目标视频**（官方）。
+- **⑩ 卡会串味 —— 必须靠 `<Picture N>` 明确指向**（RefMod 作者原话：*identity, clothing, background and composition can still mix*）：每拍都要写清该拍用哪张参考图；**不同角色必须分开存卡**（作者：*Keep different characters in separate files*）；编号**必须**来自 `reference_order`（作者：*`<Subject n>` is not automatically bound to a loader slot*），**不许**按"谁先出场/谁先说话"排。
+- **⑪ 别指望靠重复或加强度锁身份**（作者）：视觉强度是 `w·latent + (1−w)·blur(latent)` —— **不是注意力权重、不是身份百分比**；`multiplier`/`copies` 只增成本不加信息。
+- **⑫ 高速动作会被抹平变慢**（作者实测：快速手部动作 / 打斗 / 快舞被抹成又慢又软，因为参考被压成少量 latent 帧）—— 分镜应**避免高速动作**；若 `description` 里确有快速动作，提示词**要用文字描述该动作**给模型锚点。
+
 **收尾自检（保存前逐项核）**：官方六段名齐全且顺序对 / **道具表面文字没写内容**（只出现 `the printed side`/载体+动作这类说法，**没有**任何引号里的纸面文字原文；见「画面内文字 ②」） / `subject_definitions` 每行都有 `<Picture N>` 且带 `with` 外观 / `retention_analysis` 无 `(Sx)` / 台词**全句**逐字来自 description（无截断改写，删句已标注）/ 旁白者指定为画面里某个角色且声音卡写成 `<Subject N>'s off-screen narration` / 锁嘴紧贴在 `<d>` 台词旁（没隔动作描写）/ `Same exposure...` 只在风格句出现一次（没每拍复读）/ 正文英文（除 `<d>` 与画面文字） / **中文工作版除编号标记外无任何英文**（搜英文字母） / **中文工作版无 `说（画外` 写法**（一律 `旁白：`） / **道具上的文字写了「必须与参考图完全一致」的照抄指令**（有文字/表格线/印章的道具） / **单视角道具没写角度词**（搜 `three angles`/`three ways`，`final_prompt` 没写明多视角时命中即删） / **无 HTML 转义**（搜 `&lt;`/`&gt;`，命中即改回裸标签） / **逐拍台词字数达标**（逐拍数：每拍字数 ≤ 拍长秒数 × 4.5，**2 秒拍 ≤9 字**；超了拆拍或换窗口长的拍）
