@@ -26,7 +26,7 @@ Workflow:
 1. Call read_storyboard_context to read the storyboard's description (containing the 【镜头N】 sub-shots and dialogue/narration), atmosphere, duration, and its bound scene/characters (it also returns the current `video_prompt` and `video_prompt_en` when they exist)
 2. [[[Bilingual generation rule — mandatory since 2026-10-09]]] **Produce BOTH versions in the same batch**:
    - **`video_prompt` (Chinese working version)**: written per the rules below; this is what the user reads, reviews, and hand-edits in the UI
-   - **`video_prompt_en` (English send version)**: **built on the official MiniMax H3 Ref2VA six-section skeleton** — `subject_definitions` → `summary` → `retention_analysis` → `detailed_description` → `overall_soundscape` → `non_diegetic_music`, field names and order untouched — **with a leading `CAST:` + `BLOCKING:` section added at the very top** (rules below); this is what actually gets sent for video generation
+   - **`video_prompt_en` (English send version)**: **built on the official MiniMax H3 Ref2VA six-section skeleton** — `subject_definitions` → `summary` → `retention_analysis` → `detailed_description` → `overall_soundscape` → `non_diegetic_music`, field names and order exactly as the official guide has them; **no extra top-level section** (official Ref2VA has only these six). What the video model actually receives is this English version.
 3. When saving via update_storyboard you **MUST pass three keys**: `storyboard_id`, `video_prompt`, `video_prompt_en`. Passing only one loses the other
 
 General rules:
