@@ -120,12 +120,6 @@ non_diegetic_music:
        ② **道具的印刷面朝向角色自己，背对镜头**：`the printed side turned toward her, away from the lens`、`the text facing her, the blank back toward the camera`
        ③ **道具要有透视角度，不许平摊正对**：`the form held at an angle in her hands`，禁止 `lying flat` / `lying open` / `flat against her palms`
      - **🔴 道具数量必须显式锁死（防止复制成两张）**：正文里至少写一次 `a single sheet, exactly one form in her hands, never duplicated`；`retention_analysis` 里加 `only one form, never duplicated`。**只在 subject_definitions 写 `single` 不够**——2026-10-09 实测：定义里写了 `a single white paper slip`，成片后半段照样变成两张上下压着（`lying open` 被画成摊开的多张）
-     - **🔴🔴 手部/道具特写拍必须锁「只有一双手」+ 带手臂锚点（2026-10-10 实测新增）**：画面里**只剩手和道具**时，H3 失去「这是谁」的视觉锚点（脸与身体都不在画面里）→ **它会自己补一个人**。实测 sb302：拍 2-5 秒与拍 8-10 秒**两个手部特写都变成 4 只手（两双手）在同一张纸上**，而同段 5-8 秒的**纯背影拍完全正常**（那拍画面里有完整的人当锚点）。**四层都要写，缺一层就漏**：
-       - **`CAST:`** 追加 `exactly one pair of hands in frame — two hands, ten fingers, both attached to the same person`（**只写** `every visible hand belongs to the same woman` **不够**：那只说明"手属于同一人"，没锁"画面里只有一双手"）
-       - **`BLOCKING:`** 追加 `only her two hands ever enter frame; no third hand, no other person`
-       - **每一个手部/道具特写拍**：写成 `extreme close-up of <Subject N>'s two hands` 并追加 `— only her two hands in frame, no third hand`
-       - **必须带手臂锚点（关键）**：同一拍要让**前臂 + 袖口**入画（`forearms and rolled cuffs in frame`），**别只给两只孤零零的手**——有袖子连着前臂，模型才知道这两只手接在同一个身体上
-       - **中文工作版**对应写：「画面里只有 @角色 的一双手（两只手、十根手指、连着同一个人），**且前臂与袖口同时入画**，绝不出现第三只手、第二双手或第二个人」
      - **🔴 不许自己加镜头**：剧本 description 里没写的道具镜头，一个都不许补（2026-10-09 实测：146 镜头1 剧本只有掌心，LLM 自己加了报到单平铺朝镜头）。
      - **反例（全部禁用）**：`the form lying flat and fully visible facing the camera` ❌ / `settles high above them, looking down at the form lying open in her palms` ❌
      - **正例**：`the camera at a low three-quarter angle beside her hands, the printed side of the single form turned toward her and away from the lens, held at an angle, her gaze down on the paper` ✅
@@ -165,7 +159,13 @@ non_diegetic_music:
    - **主体首次清晰出现时，描述它的外观特征、在画面中的位置和当前动作**；后续镜头继续用同一个 `<Subject N>`，**不要重复定义它是什么**
    - **说话人只有一种写法**（2026-10-09 立，取代此前所有旧写法）：
      - **在场对白**（该拍人物真在说话）：`<Subject 2> (S1) says, <d>[Chinese] 台词</d>`
-     - **旁白/画外音**：`<Subject 2>'s voice-over (S1) speaks off-screen while on screen her lips stay completely closed and her mouth does not move: <d>[Chinese] 台词</d>`
+     - **🔴 画外音/旁白 —— 官方原文写法（2026-10-10 修正；我们之前自创的写法是错的）**。H3 只认一句固定短语，写法 = **主语写 `<Subject N> (Sx)` + 官方固定短语 + `<d>` 台词块 + 紧跟其后的锁嘴句**：
+       `<Subject 2> (S1) says in an off-screen voiceover: <d>[Chinese] 台词原文</d> while her lips remain completely closed.`
+       - 🔴 **固定短语 `says in an off-screen voiceover` 必须逐字照抄**。官方 base 指南原话：*「For voiceover, use the exact phrase `says in an off-screen voiceover`. Immediately after every voiceover `<d>` block, state that the corresponding on-screen character's lips remain closed.」* 官方示例：`The man (S1) says in an off-screen voiceover: <d>[English] I still remember that road.</d> while his lips remain completely closed.`
+       - 🔴 **禁用自创写法**：`speaks off-screen`、`voice-over`、`narrates`、`<Subject N>'s voice-over (S1) speaks off-screen` —— 我们用了一周，全部不触发 H3 的画外音通道（2026-10-10 实测：嘴照动）。
+       - 🔴 **锁嘴句紧跟在 `<d>` 块之后**（`while her lips remain completely closed.`），**不是**放在台词前面。
+       - 🔴 **说话人写成 `<Subject N> (Sx)`**，不写 `<Subject N>'s voice-over (Sx)`。
+       - 🔴 **不要强制"脸不入画"**。官方指南从没这条要求；正常中景/近景都可以，只要保住固定短语 + 锁嘴句两要素（2026-10-10 用户确认：以前脸在画面里的旁白拍是正常的，是被我改坏的）。
      - **旁白者必须指定为画面里某个角色**（一般就是主角自己）——画外音没有独立参考音源，不指定旁白者 = 模型自己编一个声音
      - **🔴 禁用这两种写法**（都会让模型把说话动作挂到画面里的人身上，导致嘴动/双人）：① `<Subject 2> (S1) says off-screen` ② `A young woman's low restrained voice (S1) speaks off-screen`（嗓音描述式 = 没指定旁白者，2026-10-09 实测复现）
    - **🔴 锁嘴必须与台词同句**（不能隔动作描写）：官方示例原句 `She closes her lips`。锁嘴必须**直接贴在 `<d>` 前或后**，中间不得插入任何动作/画面描写（2026-10-09 实测：锁嘴写在拍子开头、台词在末尾，中间隔了三个动作从句 → 模型照样让嘴动）
@@ -185,4 +185,4 @@ non_diegetic_music:
 
 **🔴 禁止输出 HTML 实体（2026-10-10 实测新增）**：`<Subject N>` / `<Picture N>` / `<Audio N>` / `<d>` 一律**用裸尖括号**，**绝不许写成 `&lt;Subject 1&gt;` / `&gt;` / `&amp;`**。实测：某次局部重写把 `subject_definitions` 整段写成 HTML 实体，H3 完全不认识 `<Subject 1>`，**身份绑定当场失效**（保存前搜一遍 `&lt;`/`&gt;`，命中即改回裸标签）。
 
-**收尾自检（保存前逐项核）**：`CAST:` 与 `BLOCKING:` 两行在 `subject_definitions` 之前（整篇最前）且内容齐全 / 官方六段名齐全且顺序对 / **道具表面文字没写内容**（只出现 `the printed side`/载体+动作这类说法，**没有**任何引号里的纸面文字原文；见「画面内文字 ②」） / `subject_definitions` 每行都有 `<Picture N>` 且带 `with` 外观 / `retention_analysis` 无 `(Sx)` / 台词**全句**逐字来自 description（无截断改写，删句已标注）/ 旁白者指定为画面里某个角色且声音卡写成 `<Subject N>'s off-screen narration` / 锁嘴紧贴在 `<d>` 台词旁（没隔动作描写）/ `Same exposure...` 只在风格句出现一次（没每拍复读）/ 正文英文（除 `<d>` 与画面文字） / **中文工作版除编号标记外无任何英文**（搜英文字母） / **中文工作版无 `说（画外` 写法**（一律 `旁白：`） / **道具上的文字写了「必须与参考图完全一致」的照抄指令**（有文字/表格线/印章的道具） / **单视角道具没写角度词**（搜 `three angles`/`three ways`，`final_prompt` 没写明多视角时命中即删） / **无 HTML 转义**（搜 `&lt;`/`&gt;`，命中即改回裸标签） / **逐拍台词字数达标**（逐拍数：每拍字数 ≤ 拍长秒数 × 4.5，**2 秒拍 ≤9 字**；超了拆拍或换窗口长的拍） / **画外音拍无嘴/下巴入画**（搜 `下巴`/`jaw`/`chin`/`over the shoulder near`，画外音拍命中即改成纯手部/纯背影/空镜） / **手部/道具特写拍写了「一双手」数量锁 + 前臂袖口入画**（搜 `pair of hands`/`two hands`，只手无臂的拍要补）
+**收尾自检（保存前逐项核）**：`CAST:` 与 `BLOCKING:` 两行在 `subject_definitions` 之前（整篇最前）且内容齐全 / 官方六段名齐全且顺序对 / **道具表面文字没写内容**（只出现 `the printed side`/载体+动作这类说法，**没有**任何引号里的纸面文字原文；见「画面内文字 ②」） / `subject_definitions` 每行都有 `<Picture N>` 且带 `with` 外观 / `retention_analysis` 无 `(Sx)` / 台词**全句**逐字来自 description（无截断改写，删句已标注）/ 旁白者指定为画面里某个角色且声音卡写成 `<Subject N>'s off-screen narration` / 锁嘴紧贴在 `<d>` 台词旁（没隔动作描写）/ `Same exposure...` 只在风格句出现一次（没每拍复读）/ 正文英文（除 `<d>` 与画面文字） / **中文工作版除编号标记外无任何英文**（搜英文字母） / **中文工作版无 `说（画外` 写法**（一律 `旁白：`） / **道具上的文字写了「必须与参考图完全一致」的照抄指令**（有文字/表格线/印章的道具） / **单视角道具没写角度词**（搜 `three angles`/`three ways`，`final_prompt` 没写明多视角时命中即删） / **无 HTML 转义**（搜 `&lt;`/`&gt;`，命中即改回裸标签） / **逐拍台词字数达标**（逐拍数：每拍字数 ≤ 拍长秒数 × 4.5，**2 秒拍 ≤9 字**；超了拆拍或换窗口长的拍） / **画外音拍无嘴/下巴入画**（搜 `下巴`/`jaw`/`chin`/`over the shoulder near`，画外音拍命中即改成纯手部/纯背影/空镜）
