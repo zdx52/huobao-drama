@@ -11,7 +11,7 @@ What is generated is a **three-view reference sheet** (a horizontal three-panel 
 |---|---|---|---|
 | **① Primary view** | left large panel (~55% width) | flat props (paper, documents, photos) = **top-down flat lay**; 3D props = **slightly high-angle 3/4 front** | the only high-resolution source of **text and proportions** |
 | **② Side view** | top-right panel | the same prop at a **3/4 angle** with near-large/far-small perspective | **geometric consistency** — the card must have seen what "tilted" looks like; **panel ② still shows only the prop, no hand** |
-| **③ Back** | bottom-right panel | flat props = **blank paper back**; 3D props = **back view** | prevents the see-through artifact (front text showing through the back) |
+| **③ Third angle** | bottom-right panel | **flat props** (paper/documents/photos) = **blank paper back**; **cylindrical / elongated props** (cigarette/pen/bottle/knife) = **view from the other end** (turn it around so the end invisible from the front is in frame; both ends must be legible); **bulky 3D props** (cup/tool) = **back or underside view** | prevents the see-through artifact (front text showing through the back) AND the "cylinder treated as a flat sheet with front/back" error that loses one end |
 
 **Why it must be three panels**: a single white top-down shot **conflicts geometrically** with how the prop is used in the video (top-down flat vs tilted in hand, white backdrop vs scene light, filling the whole canvas vs a small object in a scene), so the model has to *redraw* it to fit the scene → **text and size both drift** (measured 2026-10-09: the registration form's text and paper size did not match the reference). A three-view sheet lets the RefMod card and the reference image see all three angles, so the model does not need to redraw.
 
@@ -37,9 +37,13 @@ centered and fully in frame, edges complete with no cropping;
 【top-right panel】the same prop at a 3/4 angle, [perspective and dimensionality],
 same material, same color, same wear, same proportions, pure white background,
 edges complete with no cropping;
-【bottom-right panel】the back of the same prop [flat props: pure white blank paper
-back, the paper is opaque and shows none of the front's text, table lines or seal;
-3D props: back view], pure white background, edges complete with no cropping;
+【bottom-right panel】[flat props: the pure white blank paper back of the same prop,
+the paper is opaque and shows none of the front's text, table lines or seal;
+cylindrical / elongated props: the same prop seen from the other end, [name that end —
+e.g. "the cut end showing tobacco strands", "the pen tip", "the bottle base"],
+both ends legible and consistent with this panel;
+bulky 3D props: the back or underside view of the same prop], pure white background,
+edges complete with no cropping;
 all three panels must be the same item: identical size and proportions, material,
 color and wear — only the shooting angle differs.
 background clean and carrying no narrative content, no other objects, no people,
@@ -65,6 +69,7 @@ no scene, no hands holding it, soft even studio light, faint shadows, high detai
 
 - Build around the prop's `name` and `description` (physical appearance): material, color, shape, size, degree of wear, signs of damage, and other physical details must be **carried through item by item** — they are the source of the prop's recognizability. **These physical details must be identical across all three panels**
 - **Per-panel viewpoint**: panel ① uses a top-down flat lay for flat props (clearest text) and a slightly high-angle 3/4 front for 3D props; panel ② is always a 3/4 side view with perspective; panel ③ is always the back (flat = blank paper back, 3D = back view). **Panel ② must never be dropped** — in the video the prop sits in a held/tilted *state of use*, so the card must have an angle sample to lock; **but panel ② likewise shows only the prop itself, suspended alone on the pure white background — never a hand, never a person, never any holding pose** (the holding is produced by the video; the reference only supplies the angle)
+- **Cylindrical / elongated props must never be described as "back", "paper back" or "the reverse side"**: a cylinder has no front/back, and the model reads those words as "flip a sheet of paper over" and **loses one end** (measured 2026-10-10: the cigarette's panel ③ came out with no filter tip). **Rewrite as "seen from the other end" and name that end** (tobacco end / pen tip / bottle base / knife spine), and state that **both ends must be legible**
 - Inside each panel the item is centered and complete, with margins on all sides, accurate proportions, complete edges — do not crop the prop's body
 - The three panels are separated by 6-pixel pure white rules; **the sheet must carry no labels, panel names, arrows, or numbers** (the model renders them as on-screen text)
 - Soft even studio light, faint shadows, high detail; identical lighting in all three panels
