@@ -1,6 +1,13 @@
 /**
  * 批量视频提示词任务 — 异步为缺少 video_prompt 的分镜逐个运行 prompt_generator Agent
  * 进程内内存态：按集跟踪一份任务，运行中不重复启动；重启后状态丢失
+ *
+ * 2026-10-10 改为**分段生成**：video_prompt_en 不再一次写完，而是分 4 轮、
+ * 每轮只写指定段并当场实测。四轮配额之和 = 640+1850+1200+2430 = 6120，
+ * 加换行标点余量 80 = 6200 = 全文上限，所以「每段都达标 → 拼起来必然不超」，
+ * 不需要写完整篇再回头重写（用户嫌那样浪费时间）。
+ * 根因：Agent 不数字符数——实测 sb147 写到 7823 字符仍以为没超，逐段全超 28%。
+ * 落库也改由后端做（Agent 只输出纯文本，不调 save 工具，避免它顺手写别的字段）。
  */
 import { eq } from 'drizzle-orm'
 import { db, schema } from '../db/index.js'
@@ -21,48 +28,157 @@ export interface VideoPromptBatchStatus {
 
 const tasks = new Map<number, VideoPromptBatchStatus>()
 
-/** video_prompt_en 长度硬上限，与 video-prompt 技能「英文发送版」节的逐段配额一致：
- *  MiniMax H3 官方 7000 字符 hard limit − 后端风格头 591 − 余量 ≈ 6200。
- *  Agent 不数字符数（2026-10-10 实测：sb147 写到 7823 仍以为没超、逐段全超 28%），
- *  所以由后端当裁判 —— 超限就带逐段实测数字回喂重写，最多 MAX_EN_RETRY 次。 */
+/** video_prompt_en 全文硬上限（含换行与标点），与 video-prompt 技能「英文发送版」节一致：
+ *  MiniMax H3 官方 7000 字符 hard limit − 发送时拼的风格头 591 − 余量 ≈ 6200。 */
 const PROMPT_EN_LIMIT = 6200
-const MAX_EN_RETRY = 2
-/** [段名, 字符配额]，顺序即文档顺序，用于精确指出哪段超了多少 */
-const EN_SECTION_QUOTA: Array<[string, number]> = [
-  ['CAST:', 220],
-  ['BLOCKING:', 420],
-  ['subject_definitions:', 1850],
-  ['summary:', 380],
-  ['retention_analysis:', 820],
-  ['detailed_description:', 2050],
-  ['overall_soundscape:', 330],
-  ['non_diegetic_music:', 50],
+/** 单段超配额时的重写次数上限 —— 重写只针对这一段，代价远小于全文重写 */
+const MAX_SEG_RETRY = 2
+
+/** 分段表：每轮只写 segs 里的段，limit = 该轮各段配额之和（等于技能里的逐段配额相加）。
+ *  limit 全部相加 = 6120；再加换行标点余量 80 = 6200 = PROMPT_EN_LIMIT。 */
+const EN_STAGES: Array<{ key: string; label: string; segs: string[]; limit: number }> = [
+  { key: 'head', label: 'CAST 和 BLOCKING 两段', limit: 640, segs: ['CAST:', 'BLOCKING:'] },
+  { key: 'subj', label: 'subject_definitions 段', limit: 1850, segs: ['subject_definitions:'] },
+  { key: 'summ', label: 'summary 和 retention_analysis 两段', limit: 1200, segs: ['summary:', 'retention_analysis:'] },
+  {
+    key: 'detail',
+    label: 'detailed_description、overall_soundscape、non_diegetic_music 三段',
+    limit: 2430,
+    segs: ['detailed_description:', 'overall_soundscape:', 'non_diegetic_music:'],
+  },
 ]
 
-/** 按段名切分英文版，返回每段实测长度与配额差（切不出就返回空数组） */
-function measureEnSections(t: string): Array<{ seg: string; len: number; quota: number; over: number }> {
-  const found = EN_SECTION_QUOTA
-    .map(([seg, quota]) => {
-      const at = t.indexOf('\n' + seg)
-      return { seg, quota, i: at >= 0 ? at + 1 : t.indexOf(seg) }
-    })
-    .filter(x => x.i >= 0)
-    .sort((a, b) => a.i - b.i)
-  return found.map((p, n) => {
-    const end = n + 1 < found.length ? found[n + 1].i - 1 : t.length
-    const len = end - p.i
-    return { seg: p.seg, len, quota: p.quota, over: len - p.quota }
-  })
+/** 段名标记，用于把 Agent 输出里段名之前的解释性前言裁掉 */
+const SEG_MARKERS = 'CAST:|BLOCKING:|subject_definitions:|summary:|retention_analysis:|detailed_description:|overall_soundscape:|non_diegetic_music:'
+
+/** 清洗 Agent 的纯文本输出：去代码块围栏、去段名之前的废话、去尾部结语。
+ *  循环跑到稳定——围栏和前言可能同时出现（例：'以下是内容：\n```\nCAST: …\n```\n希望有帮助。'），
+ *  单趟清理会残留尾部围栏。 */
+function cleanSegText(raw: string): string {
+  let s = String(raw || '').trim()
+  for (let i = 0; i < 4; i++) {
+    const before = s
+    s = s.replace(/^\s*```[a-zA-Z]*\s*\n?/, '')
+    s = s.replace(/\n?\s*```\s*$/, '')
+    const at = s.search(new RegExp(`(?:^|\\n)(?:${SEG_MARKERS})`))
+    if (at > 0) s = s.slice(at)
+    s = s.replace(/\n+(?:以上[^\n]{0,80}|希望对[^\n]{0,80}|如需[^\n]{0,80})\s*$/, '')
+    s = s.trim()
+    if (s === before) break
+  }
+  return s
 }
 
-/** 超长回喂文案：把逐段实测数字交给 Agent，要求按技能里的砍除顺序压回上限 */
-function buildOverLengthFeedback(en: string, attempt: number): string {
-  const rows = measureEnSections(en)
-    .map(r => `${r.seg.replace(':', '')} ${r.len}/${r.quota}${r.over > 0 ? ` (+${r.over})` : ''}`)
-    .join(' / ')
-  return `⚠️ 第 ${attempt} 次重写要求：上一版 video_prompt_en 实测 ${en.length} 字符，超 ${PROMPT_EN_LIMIT} 上限 ${en.length - PROMPT_EN_LIMIT} 字符，**会被 H3 整段拒收、视频生成不出来**。
-逐段实测/配额：${rows || '（未能切段，请按技能配额表逐段自查）'}
-请按 video-prompt 技能「英文发送版」节的砍除顺序压缩到 ${PROMPT_EN_LIMIT} 字符以内，再调用 update_storyboard 保存（三个键都要传）。**绝不许砍**：\`<d>\` 台词、\`retention_analysis\` 的 fully_preserved、\`<Picture N>\` 的 with 外观、CAST 数量锁、BLOCKING 的 180 轴线。`
+/** 某段输出是否合格：非空、段名齐全、且不超本轮配额 */
+function segmentProblem(out: string, stage: { segs: string[]; limit: number }): string | null {
+  const missing = stage.segs.filter(mk => !out.includes(mk))
+  if (!out) return '上一版没有输出任何内容'
+  if (missing.length) return `上一版缺少这些段：${missing.join(' ')}`
+  if (out.length > stage.limit) return `上一版这一段实测 ${out.length} 字符，超 ${stage.limit} 上限 ${out.length - stage.limit} 字符`
+  return null
+}
+
+/** 段级重写要求（只重写这一段，不动其他段） */
+function buildSegmentRetryNote(problem: string, stage: { label: string; limit: number }, attempt: number): string {
+  return `\n\n⚠️ 重写要求（第 ${attempt} 次）：${problem}。
+**只输出【${stage.label}】**，直接给正文；不要解释、前言、结语；不要用代码块围栏；不要调用任何保存工具。
+长度必须 ≤ ${stage.limit} 字符（含换行与标点）。不许为了压长度而砍 <d> 台词、retention_analysis 的 fully_preserved、<Picture N> 的 with 外观、CAST 数量锁、BLOCKING 的 180 轴线。`
+}
+
+/** 本轮指令：先读分镜上下文，再只输出本轮那几段；带上已定稿前文保持一致 */
+function buildStagePrompt(
+  sb: { id: number; storyboardNumber: number | null },
+  videoLabel: string,
+  stage: { key: string; label: string; segs: string[]; limit: number },
+  prior: string[],
+): string {
+  const idx = EN_STAGES.findIndex(s => s.key === stage.key) + 1
+  const priorBlock = prior.length
+    ? `\n\n【已定稿的前文，仅供你保持一致，不要重复输出、不要改动一个字】\n${prior.join('\n')}`
+    : ''
+  return `请为分镜 #${sb.storyboardNumber}(ID:${sb.id})生成视频提示词 video_prompt_en 的第 ${idx}/${EN_STAGES.length} 部分。视频模型:${videoLabel}。
+
+步骤：
+1. 调用 read_storyboard_context 获取该分镜的画面描述(含【镜头N】子镜头与台词/旁白)、氛围及时长。
+2. **只输出本轮指定的段，直接给正文**：不要输出其他段；不要输出解释、前言、结语；不要用代码块围栏；不要调用任何保存工具。
+
+【本轮要写】${stage.label}
+【本轮硬性长度上限】≤ ${stage.limit} 字符（含换行与标点）—— 写完自己数字符数，超了就当场压缩到上限以内再输出。
+为什么这么严：MiniMax H3 全文上限 7000 字符，发送时后端还要拼 591 字符风格头，四轮配额之和正好 6200；任一轮超了整条会被拒收、视频生成不出来。
+绝不许为了压长度而砍：<d> 台词、retention_analysis 的 fully_preserved、<Picture N> 的 with 外观、CAST 数量锁、BLOCKING 的 180 轴线。${priorBlock}
+
+格式与规则见 video-prompt 技能「英文发送版」节。`
+}
+
+/** 分段生成完整 video_prompt_en；任一段压不下去就返回 ok:false（上层记错，不落半成品） */
+async function generateEnByStages(
+  agent: { generate: (m: unknown, o: unknown) => Promise<unknown> },
+  sb: { id: number; storyboardNumber: number | null },
+  videoLabel: string,
+  requestContext: unknown,
+  episodeId: number,
+): Promise<{ text: string; ok: boolean }> {
+  const parts: string[] = []
+  for (const stage of EN_STAGES) {
+    let out = ''
+    let ok = false
+    let problem: string | null = null
+    for (let attempt = 0; attempt <= MAX_SEG_RETRY; attempt++) {
+      const note = attempt > 0 && problem ? buildSegmentRetryNote(problem, stage, attempt) : ''
+      const res = (await agent.generate(
+        [{ role: 'user', content: buildStagePrompt(sb, videoLabel, stage, parts) + note }],
+        { maxSteps: 2, requestContext },
+      )) as { text?: string } | undefined
+      out = cleanSegText(res?.text || '')
+      problem = segmentProblem(out, stage)   // 空 / 缺段名 / 超配额 都算不合格
+      if (!problem) {
+        ok = true
+        break
+      }
+      logTaskProgress('VideoPrompt', 'segment-retry', {
+        episodeId,
+        storyboardId: sb.id,
+        stage: stage.key,
+        attempt: attempt + 1,
+        problem,
+        len: out.length,
+        limit: stage.limit,
+      })
+    }
+    if (!ok) {
+      logTaskError('VideoPrompt', 'segment-give-up', {
+        episodeId,
+        storyboardId: sb.id,
+        stage: stage.key,
+        error: problem || '未知原因',
+      })
+      return { text: '', ok: false }
+    }
+    parts.push(out)
+  }
+  return { text: parts.join('\n'), ok: true }
+}
+
+/** 中文工作版（给人看的分镜说明，不直接发给视频模型，无长度压力） */
+async function generateZhPrompt(
+  agent: { generate: (m: unknown, o: unknown) => Promise<unknown> },
+  sb: { id: number; storyboardNumber: number | null },
+  videoLabel: string,
+  requestContext: unknown,
+): Promise<string> {
+  const res = (await agent.generate(
+    [
+      {
+        role: 'user',
+        content: `请为分镜 #${sb.storyboardNumber}(ID:${sb.id})生成中文工作版视频提示词(video_prompt)。视频模型:${videoLabel},请根据该模型的特性和时长限制生成。
+请先调用 read_storyboard_context 获取该分镜的画面描述(含【镜头N】子镜头与台词/旁白)、氛围及时长。
+这份是给人看的工作版（不直接发给视频模型，无长度限制），写法见 video-prompt 技能的中文工作版章节。
+**只输出正文**：不要输出解释、前言、结语；不要用代码块围栏；不要调用任何保存工具。`,
+      },
+    ],
+    { maxSteps: 2, requestContext },
+  )) as { text?: string } | undefined
+  return cleanSegText(res?.text || '')
 }
 
 /** 启动批量生成（立即返回）；运行中返回 started:false,total:-1；无待生成分镜返回 started:false,total:0；
@@ -117,42 +233,40 @@ export async function startVideoPromptBatch(
       task.current_storyboard_id = sb.id
       logTaskProgress('VideoPrompt', 'batch-shot', { episodeId, storyboardId: sb.id, index: task.completed + task.failed + 1, total: task.total })
       try {
-        const baseContent = `请为分镜 #${sb.storyboardNumber}(ID:${sb.id})生成视频提示词(video_prompt)。视频模型:${videoLabel},请根据该模型的特性和时长限制生成。
-请先调用 read_storyboard_context 获取该分镜的画面描述(含【镜头N】子镜头与台词/旁白)、氛围及时长，据此**同批生成两份**：video_prompt(中文工作版)与 video_prompt_en(H3 官方 Ref2VA 六段式英文版,规则见 video-prompt 技能「英文发送版」节)。
-
-🔴 **硬性长度上限（必守，不许目测估算）**：video_prompt_en 全文（含换行与标点）**必须 ≤ 6200 字符**。**保存前逐段核对技能里的配额表并数字符数**：CAST ≤220 / BLOCKING ≤420 / subject_definitions ≤1850 / summary ≤380 / retention_analysis ≤820 / detailed_description ≤2050 / overall_soundscape ≤330 / non_diegetic_music ≤50。**实测超限会被整段拒收、视频根本生成不出来**（历史事故：写到 7823 字符 → 拼接风格头后 8414 → 报「提示词超长：MiniMax H3 上限 7000 字符」）。超了就按技能里的砍除顺序压回 6200 以内再保存。**绝不许砍**：「<d>」 台词、retention_analysis 每条的 fully_preserved、「<Picture N>」 的 with 外观、CAST 数量锁、BLOCKING 的 180 轴线。
-
-update_storyboard 必须同时传三个键: storyboard_id、video_prompt、video_prompt_en。不要回传该分镜的其他任何字段,不要重新拆分整集。`
-        // 长度闭环：Agent 不数字符数（实测 sb147 写到 7823 仍以为没超），
-        // 所以由后端实测——超 6200 就把逐段实测数字回喂要求重写，最多 MAX_EN_RETRY 次。
-        let lastEn = ''
-        for (let attempt = 0; attempt <= MAX_EN_RETRY; attempt++) {
-          const feedback = attempt === 0 ? '' : `\n\n${buildOverLengthFeedback(lastEn, attempt)}`
-          await agent.generate([{ role: 'user', content: baseContent + feedback }], { maxSteps: 12, requestContext })
-          const [cur] = await db.select().from(schema.storyboards).where(eq(schema.storyboards.id, sb.id))
-          const en = (cur?.videoPromptEn || '').trim()
-          if (!(cur?.videoPrompt || '').trim() || !en) break   // 生成失败，重试无意义
-          if (en.length <= PROMPT_EN_LIMIT) break              // 达标
-          lastEn = en
-          logTaskError('VideoPrompt', 'over-length-retry', {
-            storyboardId: sb.id, attempt: attempt + 1, len: en.length, over: en.length - PROMPT_EN_LIMIT,
+        // 1) 分段生成英文版：每段当场达标 → 拼起来必然 ≤ 6200（配额之和 = 上限）
+        const en = await generateEnByStages(agent, sb, videoLabel, requestContext, episodeId)
+        if (!en.ok) {
+          task.failed++
+          continue
+        }
+        if (en.text.length > PROMPT_EN_LIMIT) {
+          // 各段都已达标，理论上不会走到这里；留痕便于发现配额表被改坏
+          logTaskError('VideoPrompt', 'batch-shot', {
+            storyboardId: sb.id,
+            error: `分段拼接后仍超 ${en.text.length} > ${PROMPT_EN_LIMIT}（各段应已达标，请核对 EN_STAGES 配额与技能配额是否一致）`,
           })
         }
-        // 以实际落库为准判定成败（2026-10-09：中英两份都落库才算成功，只看中文版会漏判）
+        // 2) 中文工作版
+        const zh = await generateZhPrompt(agent, sb, videoLabel, requestContext)
+        if (!zh) {
+          task.failed++
+          logTaskError('VideoPrompt', 'batch-shot', { storyboardId: sb.id, error: '中文工作版生成为空' })
+          continue
+        }
+        // 3) 后端落库（英文版是分段落库，中文版随后一次写入）
+        await db.update(schema.storyboards)
+          .set({ videoPrompt: zh, videoPromptEn: en.text })
+          .where(eq(schema.storyboards.id, sb.id))
         const [fresh] = await db.select().from(schema.storyboards).where(eq(schema.storyboards.id, sb.id))
         const freshEn = (fresh?.videoPromptEn || '').trim()
         if ((fresh?.videoPrompt || '').trim() && freshEn) {
           task.completed++
-          if (freshEn.length > PROMPT_EN_LIMIT) {
-            // 重试用尽仍超：不拦（发送侧还有 7000 硬限），留痕便于复盘
-            logTaskError('VideoPrompt', 'batch-shot', {
-              storyboardId: sb.id,
-              error: `video_prompt_en 仍超长 ${freshEn.length} > ${PROMPT_EN_LIMIT}（重写 ${MAX_EN_RETRY} 次未达标）`,
-            })
-          }
+          logTaskProgress('VideoPrompt', 'batch-shot-saved', {
+            episodeId, storyboardId: sb.id, en_len: freshEn.length, zh_len: (fresh?.videoPrompt || '').length,
+          })
         } else {
           task.failed++
-          logTaskError('VideoPrompt', 'batch-shot', { storyboardId: sb.id, error: 'agent finished but video_prompt or video_prompt_en is empty' })
+          logTaskError('VideoPrompt', 'batch-shot', { storyboardId: sb.id, error: '落库后读回为空' })
         }
       } catch (err: any) {
         task.failed++
