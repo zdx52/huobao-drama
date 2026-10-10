@@ -41,30 +41,33 @@ const tasks = new Map<number, VideoPromptBatchStatus>()
  *  MiniMax H3 官方 7000 字符 hard limit − 发送时拼的风格头 591 − 余量 ≈ 6200。 */
 export const PROMPT_EN_LIMIT = 6200
 /** 每一层（整体生成 / 单组重写）的重试次数上限 */
-const MAX_SEG_RETRY = 2
+const MAX_SEG_RETRY = 3
 
 /** 段名 → 字符配额（顺序即文档顺序） */
 const EN_SECTION_QUOTA: Array<[string, number]> = [
-  ['CAST:', 220],
-  ['BLOCKING:', 420],
-  ['subject_definitions:', 1850],
-  ['summary:', 380],
-  ['retention_analysis:', 820],
-  ['detailed_description:', 2050],
-  ['overall_soundscape:', 330],
-  ['non_diegetic_music:', 50],
+  // 2026-10-10 重新分配：原 CAST 220 + BLOCKING 420 实测压不下来
+  // （AI 把 head 组压到 817 仍超 640 —— CAST 的数量锁句 + BLOCKING 的站位/朝向/180 轴线
+  //  本身就是硬内容，砍不动）。改为按"实际需要"分配，总量 5920 仍远低于 6200。
+  ['CAST:', 320],
+  ['BLOCKING:', 560],
+  ['subject_definitions:', 1700],
+  ['summary:', 340],
+  ['retention_analysis:', 760],
+  ['detailed_description:', 1900],
+  ['overall_soundscape:', 300],
+  ['non_diegetic_music:', 40],
 ]
 
 /** 核定/重写分组：相邻段一起处理，limit = 组内配额之和。
  *  八段配额相加 = 6120；全部达标后拼接总长 ≤ 6127 < 6200 = PROMPT_EN_LIMIT。 */
 const EN_STAGES: Array<{ key: string; label: string; segs: string[]; limit: number }> = [
-  { key: 'head', label: 'CAST 和 BLOCKING 两段', limit: 640, segs: ['CAST:', 'BLOCKING:'] },
-  { key: 'subj', label: 'subject_definitions 段', limit: 1850, segs: ['subject_definitions:'] },
-  { key: 'summ', label: 'summary 和 retention_analysis 两段', limit: 1200, segs: ['summary:', 'retention_analysis:'] },
+  { key: 'head', label: 'CAST 和 BLOCKING 两段', limit: 880, segs: ['CAST:', 'BLOCKING:'] },
+  { key: 'subj', label: 'subject_definitions 段', limit: 1700, segs: ['subject_definitions:'] },
+  { key: 'summ', label: 'summary 和 retention_analysis 两段', limit: 1100, segs: ['summary:', 'retention_analysis:'] },
   {
     key: 'detail',
     label: 'detailed_description、overall_soundscape、non_diegetic_music 三段',
-    limit: 2430,
+    limit: 2240,
     segs: ['detailed_description:', 'overall_soundscape:', 'non_diegetic_music:'],
   },
 ]
@@ -140,7 +143,7 @@ function buildFullPrompt(sb: { id: number; storyboardNumber: number | null }, vi
 请先调用 read_storyboard_context 获取该分镜的画面描述(含【镜头N】子镜头与台词/旁白)、氛围及时长；格式与规则见 video-prompt 技能「英文发送版」节。
 
 🔴 长度要求（**一开始就写到位，不要写完再回头压** —— 压缩必须重跑一遍，很浪费）：
-- **目标长度 4800~5600 字符**（完整提示词，含换行与标点）。
+- **目标长度 4600~5600 字符**（完整提示词，含换行与标点）。
 - 逐段目标：${targets}
 - **硬上限 6200 字符**：写入时后端会校验，超了直接拒绝并要求重写。MiniMax H3 上限 7000，发送时还要拼 591 字符风格头。
 - **宁可精炼**：每段只说必要的，形容词能省则省，但必须保住下面这些不许砍的内容。

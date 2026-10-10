@@ -153,15 +153,15 @@ The MiniMax H3 prompt limit is **7000 characters — an official hard limit that
 **Going over means the request is rejected outright and no video is produced** (measured 2026-10-09: sb147 reached 7608 characters → 8403 after concatenation → error "prompt too long: MiniMax H3 limit 7000 characters, current 8403").
 
 Per-section quotas (allocate to these; count each section when done):
-- `CAST:` ≤ 220
-- `BLOCKING:` ≤ 420
-- `subject_definitions` ≤ 1850 (holds even for multi-character segments)
-- `summary` ≤ 380 (the official only asks for one short English paragraph)
-- `retention_analysis` ≤ 820
-- `detailed_description` ≤ 2050 (official 350–500 words; take the low end)
-- `overall_soundscape` ≤ 330
-- `non_diegetic_music` ≤ 50
-- newlines and punctuation ≈ 80 → **total ≤ 6200**
+- `CAST:` ≤ 320
+- `BLOCKING:` ≤ 560
+- `subject_definitions` ≤ 1700 (holds even for multi-character segments)
+- `summary` ≤ 340 (the official only asks for one short English paragraph)
+- `retention_analysis` ≤ 760
+- `detailed_description` ≤ 1900 (official 350–500 words; take the low end)
+- `overall_soundscape` ≤ 300
+- `non_diegetic_music` ≤ 40
+- total ≤ 5920 (the hard cap for the whole prompt stays 6200)
 
 **When over budget, cut in this order**: ① redundant clauses in `summary` ② `soundscape` effects already stated in the body ③ description in `BLOCKING` that duplicates the body ④ appearance modifiers in `subject_definitions`.
 **Never cut**: `<d>` dialogue, any `fully_preserved` line in `retention_analysis`, `<Picture N>` and the `with` clause, the count lock in `CAST`, the orientation and 180-axis in `BLOCKING`.

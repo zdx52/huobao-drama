@@ -155,15 +155,15 @@ MiniMax H3 的 prompt 上限是 **7000 字符，官方 hard limit、不可放宽
 **超限直接被拒、整段生成不出来**（2026-10-09 实测：sb147 写到 7608 字符 → 拼接后 8403 → 报「提示词超长：MiniMax H3 上限 7000 字符，当前 8403」）。
 
 各段配额（按此分配，写完逐段数）：
-- `CAST:` ≤ 220
-- `BLOCKING:` ≤ 420
-- `subject_definitions` ≤ 1850（多角色段也别超）
-- `summary` ≤ 380（官方只要求 one short English paragraph）
-- `retention_analysis` ≤ 820
-- `detailed_description` ≤ 2050（官方 350–500 词，取下限附近）
-- `overall_soundscape` ≤ 330
-- `non_diegetic_music` ≤ 50
-- 换行与标点余量 ≈ 80 → **合计 ≤ 6200**
+- `CAST:` ≤ 320
+- `BLOCKING:` ≤ 560
+- `subject_definitions` ≤ 1700（多角色段也别超）
+- `summary` ≤ 340（官方只要求 one short English paragraph）
+- `retention_analysis` ≤ 760
+- `detailed_description` ≤ 1900（官方 350–500 词，取下限附近）
+- `overall_soundscape` ≤ 300
+- `non_diegetic_music` ≤ 40
+- 合计 ≤ 5920（全文硬上限仍是 6200）
 
 **超了就砍，顺序**：① `summary` 冗余从句 ② `soundscape` 与正文重复的音效 ③ `BLOCKING` 中与正文重复的描述 ④ `subject_definitions` 的外观修饰词。
 **绝不许砍**：`<d>` 台词、`retention_analysis` 每条 `fully_preserved`、`<Picture N>` 与 `with` 外观、`CAST` 数量锁、`BLOCKING` 朝向与 180 度轴线。

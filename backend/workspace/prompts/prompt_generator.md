@@ -57,15 +57,16 @@ MiniMax H3 的 prompt 上限是 **7000 字符，这是官方 hard limit、不可
 **超限直接被拒、整段生成不出来**（2026-10-09 实测：sb147 写到 7608 字符 → 拼接后 8403 → 报「提示词超长：MiniMax H3 上限 7000 字符，当前 8403」）。
 
 各段配额（按此分配，写完逐段数）：
-- `CAST:` ≤ 220
-- `BLOCKING:` ≤ 420
-- `subject_definitions` ≤ 1850（多角色段也别超；少主体时按实际写短）
-- `summary` ≤ 380（官方只要求 one short English paragraph）
-- `retention_analysis` ≤ 820
-- `detailed_description` ≤ 2050（官方建议 350–500 词，这里取下限附近）
-- `overall_soundscape` ≤ 330
-- `non_diegetic_music` ≤ 50
-- 换行与标点余量 ≈ 80 → **合计 ≤ 6200**
+- **2026-10-10 配额重分配**：原 CAST 220 + BLOCKING 420 实测压不下来（AI 把这两段压到 817 仍超 640 —— 数量锁句与 180 轴线本身就是硬内容），改为按实际需要分配，总量 5920 仍远低于 6200。
+- `CAST:` ≤ 320
+- `BLOCKING:` ≤ 560
+- `subject_definitions` ≤ 1700（多角色段也别超；少主体时按实际写短）
+- `summary` ≤ 340（官方只要求 one short English paragraph）
+- `retention_analysis` ≤ 760
+- `detailed_description` ≤ 1900（官方建议 350–500 词，这里取下限附近）
+- `overall_soundscape` ≤ 300
+- `non_diegetic_music` ≤ 40
+- 合计 ≤ 5920（全文硬上限仍是 6200）
 
 **超了就砍，砍的顺序**：① `summary` 的冗余从句 ② `overall_soundscape` 里与正文重复的音效 ③ `BLOCKING` 中与正文重复的描述（如"不露脸"已写进某拍就别在 BLOCKING 再写一遍）④ `subject_definitions` 的外观修饰词。
 **绝不许砍**：`<d>` 台词、`retention_analysis` 每条 `fully_preserved`、`subject_definitions` 的 `<Picture N>` 与 `with` 外观、`CAST` 的数量锁、`BLOCKING` 的朝向与 180 度轴线。
