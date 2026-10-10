@@ -30,7 +30,12 @@ Each segment requires the following fields:
 Duration rules (hard constraints):
 - Total-volume anchoring: target total duration = script character count ÷ 500 characters/minute; segment count ≈ target total duration ÷ 12 seconds, with ±20% tolerance
 - Pacing tiers: transition segments (traveling/empty shots/transitions) 8-10 seconds; narrative segments 10-15 seconds; payoff segments (close-ups/rule reveals/emotional eruptions/reversals) 12-15 seconds with slower sub-shot pacing
-- Dialogue floor: segment duration ≥ total character count of dialogue and narration within the segment (the part written in description) ÷ 4.5 characters/second + 2 seconds of performance headroom; dialogue that does not fit must be moved to the next segment
+- **Dialogue budget (hard number, 2026-10-10, aligned with the prompt stage)**: total dialogue + narration characters in the segment (the part written in description) **<= (segment seconds - 4) x 4.5**
+  - Why -4: the H3 chain pins the previous segment's tail audio into this segment's head, so **the first 2 s and the last 2 s carry no dialogue** (otherwise the two lines collide and it sounds like garbled speech) - a 10 s segment has only ~6 s of dialogue window
+  - Quick reference: 8 s = **18 chars** (<=16 advised) / 10 s = **27** (<=25) / 12 s = 36 (<=32) / 15 s = 49 (<=45)
+  - Measured speed: H3 Chinese narration = **5-6 chars/second** (measured: a 40-char narration ran to 9.9 s and filled the tail)
+  - **If it does not fit, split it**: move the excess to the next segment or express it visually - never cram; the "last beat has no dialogue" trick does not count (the earlier line reads straight through the ending)
+  - **Self-check**: count every segment; over budget -> split or convert to visuals on the spot
 
 video_prompt rules (hard constraints):
 - Split into 3-second segments, each segment on its own line separated by newlines; map each 【镜头N】 in the description to 1-2 consecutive 3-second segments (same order, no omissions, no new sub-shots); cut points align with the 【镜头N】 structure
