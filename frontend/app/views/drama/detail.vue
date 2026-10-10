@@ -234,6 +234,7 @@
                 @keydown.enter.prevent="openEdit(m)"
                 @keydown.space.prevent="openEdit(m)"
               >
+                <button class="asset-del-btn" type="button" :title="t('episode.asset.delChar')" @click.stop="askDeleteAsset('character', m)"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
                 <div class="character-asset-main">
                   <div class="character-asset-overview">
                     <div class="character-portrait">
@@ -310,6 +311,7 @@
                 @keydown.enter.prevent="openEdit(m)"
                 @keydown.space.prevent="openEdit(m)"
               >
+                <button class="asset-del-btn" type="button" :title="g.kindKey === 'scene' ? t('episode.asset.delScene') : t('episode.asset.delProp')" @click.stop="askDeleteAsset(g.kindKey, m)"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
                 <div class="asset-cover wide">
                   <img v-if="matHasImage(m)" :src="thumbOf(assetSrc(m))" class="previewable-image" loading="lazy" @error="thumbFallback($event, assetSrc(m))" @click.stop="openAssetViewer(m)" />
                   <div v-else class="asset-cover-empty">
@@ -384,7 +386,7 @@
           <header class="dialog-head mat-detail-head">
             <div class="mat-detail-title-block">
               <span class="mat-detail-kicker">{{ editTarget.kindKey === 'character' ? t('episode.asset.typeChar') : editTarget.kindKey === 'scene' ? t('episode.asset.typeScene') : t('episode.asset.typeProp') }}</span>
-              <h2 class="mat-detail-title">{{ editTarget.name || t('detail.mat.unnamed') }}</h2>
+              <h2 class="mat-detail-title">{{ (editTarget.kindKey === 'scene' ? editTarget.location : editTarget.name) || t('detail.mat.unnamed') }}</h2>
             </div>
             <div class="mat-detail-head-actions">
               <span v-if="editTarget.kindKey === 'character'" class="tag">{{ editTarget.role || t('common.role') }}</span>
@@ -660,6 +662,14 @@
       </div>
     </div>
     </Teleport>
+    <ConfirmDialog
+      :open="assetDelete.open"
+      :title="t('episode.delete.title', { type: assetDeleteTypeLabel })"
+      :message="t('episode.delete.message', { type: assetDeleteTypeLabel, name: assetDeleteName })"
+      :loading="assetDelete.loading"
+      @confirm="confirmDeleteAsset"
+      @cancel="assetDelete.open = false"
+    />
     <ConfirmDialog
       :open="!!episodeToDelete"
       :title="t('detail.ep.deleteTitle')"
@@ -1185,6 +1195,38 @@ async function saveEdit() {
 }
 
 /* ===== 素材库「总刷新」：本页用到的数据一次全拉（等价于重新进页面） ===== */
+// ─── 删除资产（素材库）────────────────────────────────────────
+const assetDelete = ref({ open: false, type: '', item: null, loading: false })
+const assetDeleteName = computed(() => assetDelete.value.item?.name || assetDelete.value.item?.location || '')
+const assetDeleteTypeLabel = computed(() => ({
+  character: t('episode.asset.typeChar'),
+  scene: t('episode.asset.typeScene'),
+  prop: t('episode.asset.typeProp'),
+}[assetDelete.value.type] || ''))
+
+function askDeleteAsset(type, item) {
+  assetDelete.value = { open: true, type, item, loading: false }
+}
+
+async function confirmDeleteAsset() {
+  const { type, item } = assetDelete.value
+  if (!item || assetDelete.value.loading) return
+  assetDelete.value.loading = true
+  try {
+    if (type === 'character') await characterAPI.del(item.id)
+    else if (type === 'scene') await sceneAPI.del(item.id)
+    else await propAPI.del(item.id)
+    toast.success(t('episode.delete.deleted', { type: assetDeleteTypeLabel.value }))
+    assetDelete.value.open = false
+    if (editDialog.value && editTarget.value && editTarget.value.kindKey === type && editTarget.value.id === item.id) closeEdit()
+    await load()
+  } catch (e) {
+    toastError(e)
+  } finally {
+    assetDelete.value.loading = false
+  }
+}
+
 const assetsRefreshing = ref(false)
 async function refreshAssets() {
   if (assetsRefreshing.value) return
@@ -1518,6 +1560,28 @@ onMounted(async () => { await load(); await loadRefmodStatus(); await loadVoiceB
 .character-asset-card {
   cursor: pointer;
 }
+.asset-click-card { position: relative; }
+.asset-del-btn {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 3;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: rgba(0, 0, 0, 0.5);
+  color: #fff;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s, background 0.15s;
+}
+.asset-del-btn:hover { background: var(--action-danger); }
+.character-asset-card:hover .asset-del-btn,
+.asset-click-card:hover .asset-del-btn { opacity: 1; }
 .asset-click-card:focus-visible,
 .character-asset-card:focus-visible {
   outline: none;
@@ -1525,6 +1589,7 @@ onMounted(async () => { await load(); await loadRefmodStatus(); await loadVoiceB
   box-shadow: 0 0 0 3px var(--button-focus), var(--shadow-panel);
 }
 .character-asset-card {
+  position: relative;
   display: flex;
   flex-direction: column;
   overflow: hidden;
