@@ -99,6 +99,11 @@ non_diegetic_music:
      - **写法（道具三视图板）**：`<Subject 3> is the registration form shown from three angles in <Picture 3>: a top-down view of its printed front, a three-quarter view of the same sheet, and its blank back — one single sheet seen three ways, not two or three separate forms.`
      - **角色四格板可不写四格**（模型天然理解人的正侧背），但**道具、以及任何带正反面的物体必须写**。
      - **`retention_analysis` 同步**：末尾加 `stays identical from every angle shown in <Picture 3>; one single sheet, never duplicated.`
+   - **🔴🔴 道具锁定必须逐拍覆盖（2026-10-10 用户拍板修，实测根因）**：道具的**参考图与 RefMod 卡是全分镜通用的**，但**提示词是逐拍写的** —— **哪一拍没提到道具，那一拍的道具就锁不住**（模型自己决定画不画 → 走形 / 丢失 / 变形）。三层必须**拍数对齐**：
+     - **① `retention_analysis` 覆盖道具出现的每一拍**：`<Subject 3> (appears in [Shot 1], [Shot 2], [Shot 3]): fully_preserved - ...` —— 该道具在几拍出现就列几拍。**漏列 = 明确告诉模型那一拍没有这个道具**。
+     - **② 正文每一拍都要重复提到该道具**：不能只在第一拍写一次、后面默认"还在"。**每拍至少点名一次**（中文 `@道具名` / 英文 `the form`），并带上该拍的状态（`in her hand` / `on the bench` / `still in her grip`）。
+     - **③ 收尾自检（数一遍）**：道具出现的拍数 **=** `retention_analysis` 里列它的拍数 **=** 正文提到它的拍数。**三者不等就是漏了**。
+     - 2026-10-10 实测：ep7 重拆后 36 条分镜里，**8 条道具只出现在 1 个镜头、14 条完全没提道具** → 那些镜头里的道具必然失控。
    - **道具必须至少有一个"能看清全貌"的镜头，但靠机位不靠角色举（2026-10-09 三轮实测定稿）**：
      - **为什么需要**：如果 `<Subject N>` 全程只是"被攥在手里 / 被折起来 / 塞进口袋"，画面里没有可锁定的载体，模型会脑补 → 道具必丢。
      - **🔴 怎么给：禁止写 `facing the camera` / `toward the camera` / `presented to the viewer`** —— 这些词会让模型把道具/肢体**正对观众展示**，成片就是"角色举着道具给观众看"，非常出戏（2026-10-09 实测复现，用户明确否掉）。
