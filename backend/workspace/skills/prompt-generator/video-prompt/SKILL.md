@@ -213,6 +213,14 @@ non_diegetic_music:
 4. **`detailed_description`** — 正文
    - **`[Shot 1]` 不加时间戳**，后续镜头 `[Shot 2] At 00:06.000, ...`
    - **🔴 切镜必须用官方动词（2026-10-10 实测：我们一个都没写）**：切镜写成 `the camera cuts to` / `the shot cuts to` / `the shot transitions to` / `the shot changes to` / `the shot switches to`，**写在该镜的句子里** —— 如 `[Shot 2] At 00:03.500, the camera cuts to an extreme close-up of ...`。**不许只写 `[Shot 2] At 00:02.000, extreme close-up of ...` 而不带动词** —— 没动词 H3 可能读成**同一镜头的延续**而不是切镜。cross-dissolve / fade / wipe 只在明确需要时用。
+   - **🔴🔴 镜头怎么写（2026-10-10 查官方 + 社区指南后补全，5 条硬规）**：
+     - **① 景别用标准词**：`wide shot` / `wide establishing shot` / `medium shot` / `medium close-up` / `close-up` / `extreme close-up` / `over-the-shoulder` / `POV shot` / `low angle` / `high angle`。**不要自造说法** —— H3 就是在这些固定英文词上训练的。
+     - **② 每镜只给一个主要机位**（one main camera behaviour per shot）：一个 `[Shot N]` 里**只定一个景别/机位**，不要在同一拍里既写 `wide shot` 又写 `extreme close-up`。
+     - **③ 禁止堆矛盾指令**：`wide shot, extreme close-up, pan left, and static camera` 这种堆叠会逼模型在两套互斥指令间自行仲裁，出来是乱切或干脆不动。**一个镜头要么切、要么运镜，只能选一种。**
+     - **④ 镜头运动写三要素（官方原文）**：**motion type**（Zoom In/Out、Push In/Pull Out、Pan、Truck、Tilt、Pedestal、Arc、Tracking、Static、Shake、POV、Roll）＋ **amplitude**（small/large）＋ **speed**（slow/fast），**写成一个自然的英文动作句**，**禁止**把标签堆在句尾。
+       - ✅ `The camera pushes in with small amplitude at slow speed toward the folded letter in her hands.`
+       - ❌ `..., push in, small amplitude, slow speed.`
+     - **⑤ framing 变化要连贯**：同一镜内景别推进要写出**中间过程**，让镜头真的"移动"，而不是把主体突然缩小/放大。✅ `close portrait → chest-up frame → full-body view → wide view`；❌ 直接从 `close-up` 跳到 `wide shot`。
    - **🔴 台词跨切镜 → `<scenetrans>`（官方规则，我们 2026-10-10 之前从未实现）**：同一句台词/歌词跨切镜时，**切口两端都标 `<scenetrans>`**，并声明音频连续（`continues seamlessly across the cut` / `carries over from the previous shot`）。
    - **🔴 台词被视频结尾截断 → `<cutoff>`（官方）**：给被截断那句标 `<cutoff>`。
    - **🔴 说话人首次发声要给稳定声音身份（官方）**：角色第一次出声时，在 `<d>` 块**外**写清身份 —— 角色类型、年龄、性别、是否在画面内、音高、音色、语速、口音。
