@@ -100,6 +100,10 @@ non_diegetic_music:
      - **写法（道具三视图板）**：`<Subject 3> is the registration form shown from three angles in <Picture 3>: a top-down view of its printed front, a three-quarter view of the same sheet, and its blank back — one single sheet seen three ways, not two or three separate forms.`
      - **角色四格板可不写四格**（模型天然理解人的正侧背），但**道具、以及任何带正反面的物体必须写**。
      - **`retention_analysis` 同步**：末尾加 `stays identical from every angle shown in <Picture 3>; one single sheet, never duplicated.`
+   - **🔴🔴 道具上的文字必须与参考图完全一致（2026-10-10 用户拍板）**：道具表面**只要有文字、表格线、印章**，**必须照参考图原样画出来 —— 不得改写、增删、臆造、变形**。这是**下指令要求"照抄"**，**不是把文字内容写进提示词**（内容仍由参考图 / `props.final_prompt` 管，见上文「画面内文字 ②」）。
+     - 中文写法：`@道具名上的任何文字、表格线与印章，必须与参考图中的完全一致，不得改写、增删或臆造。`
+     - 英文写法：`Any text, table lines or seal on <Subject N> must match <Picture N> exactly — do not reword, add or invent.`
+     - **🔴 前提（2026-10-10 实测教训）**：**参考图里的字必须清晰可辨**。道具参考图必须是**单一正面视角、字占满画面**；**三联板（正面/斜视/背面拼一张）会让模型分不清哪个是标准视角**（实测：sb302 报到单的字与参考图不符，而同一段里场景图上的标语字一直很准 —— 差别就在场景图是单视角、道具图是三联板）。**图不清楚时，下任何指令都照抄不出来。**
    - **🔴🔴 道具锁定必须逐拍覆盖（2026-10-10 用户拍板修，实测根因）**：道具的**参考图与 RefMod 卡是全分镜通用的**，但**提示词是逐拍写的** —— **哪一拍没提到道具，那一拍的道具就锁不住**（模型自己决定画不画 → 走形 / 丢失 / 变形）。三层必须**拍数对齐**：
      - **① `retention_analysis` 覆盖道具出现的每一拍**：`<Subject 3> (appears in [Shot 1], [Shot 2], [Shot 3]): fully_preserved - ...` —— 该道具在几拍出现就列几拍。**漏列 = 明确告诉模型那一拍没有这个道具**。
      - **② 正文每一拍都要重复提到该道具**：不能只在第一拍写一次、后面默认"还在"。**每拍至少点名一次**（中文 `@道具名` / 英文 `the form`），并带上该拍的状态（`in her hand` / `on the bench` / `still in her grip`）。
@@ -171,4 +175,4 @@ non_diegetic_music:
 
 **编号一致性（硬性）**：`<Subject N>` / `<Picture N>` / `<Audio J>` 与 `(Sx)` 四套编号各自独立计数。`(S1)` 归**旁白者**——旁白者必须是画面里某个角色（一般就是主角自己），**不是独立的陌生人**；`<Audio J>` 绑的是**该角色的旁白音色**，写成 `<Subject N>'s off-screen narration (S1)`。
 
-**收尾自检（保存前逐项核）**：`CAST:` 与 `BLOCKING:` 两行在 `subject_definitions` 之前（整篇最前）且内容齐全 / 官方六段名齐全且顺序对 / **道具表面文字没写内容**（只出现 `the printed side`/载体+动作这类说法，**没有**任何引号里的纸面文字原文；见「画面内文字 ②」） / `subject_definitions` 每行都有 `<Picture N>` 且带 `with` 外观 / `retention_analysis` 无 `(Sx)` / 台词**全句**逐字来自 description（无截断改写，删句已标注）/ 旁白者指定为画面里某个角色且声音卡写成 `<Subject N>'s off-screen narration` / 锁嘴紧贴在 `<d>` 台词旁（没隔动作描写）/ `Same exposure...` 只在风格句出现一次（没每拍复读）/ 正文英文（除 `<d>` 与画面文字） / **中文工作版除编号标记外无任何英文**（搜英文字母） / **中文工作版无 `说（画外` 写法**（一律 `旁白：`）
+**收尾自检（保存前逐项核）**：`CAST:` 与 `BLOCKING:` 两行在 `subject_definitions` 之前（整篇最前）且内容齐全 / 官方六段名齐全且顺序对 / **道具表面文字没写内容**（只出现 `the printed side`/载体+动作这类说法，**没有**任何引号里的纸面文字原文；见「画面内文字 ②」） / `subject_definitions` 每行都有 `<Picture N>` 且带 `with` 外观 / `retention_analysis` 无 `(Sx)` / 台词**全句**逐字来自 description（无截断改写，删句已标注）/ 旁白者指定为画面里某个角色且声音卡写成 `<Subject N>'s off-screen narration` / 锁嘴紧贴在 `<d>` 台词旁（没隔动作描写）/ `Same exposure...` 只在风格句出现一次（没每拍复读）/ 正文英文（除 `<d>` 与画面文字） / **中文工作版除编号标记外无任何英文**（搜英文字母） / **中文工作版无 `说（画外` 写法**（一律 `旁白：`） / **道具上的文字写了「必须与参考图完全一致」的照抄指令**（有文字/表格线/印章的道具）
