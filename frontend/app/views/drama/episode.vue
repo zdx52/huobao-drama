@@ -2929,8 +2929,11 @@ function doBreakdown() {
   const propList = propItems.value.length
     ? propItems.value.map(p => `${p.name}(ID:${p.id})`).join('、')
     : '（当前集还没有道具）'
-  runAgent('storyboard_breaker', `请基于当前集剧本拆分分镜，并为每个分镜段落同时生成 video_prompt（视频生成提示词）。
-本次视频模型：${effectiveVideoModelLabel.value}，请按该模型的特性与时长限制生成 video_prompt。
+  // 2026-10-10 用户拍板：拆分只拆镜头、只写 description，不生成 video_prompt。
+  // 原来这里要求「同时生成 video_prompt + 按 minimax-h3-r2v 特性」——Agent 不懂该模型特性就
+  // 跑去翻技能文件自学，把 30 步全花在读文件上，最后 save_storyboards 一次都没调成
+  //（实测：返回 200、跑了 4.6 分钟、库里一条没变）。提示词改由用户之后单独点「批量补齐提示词」生成。
+  runAgent('storyboard_breaker', `请基于当前集剧本拆分分镜（**只拆镜头、只写 description 画面描述，不要生成 video_prompt** —— 视频提示词之后单独生成）。
 
 当前集已有角色：${charList}
 当前集已有场景：${sceneList}
