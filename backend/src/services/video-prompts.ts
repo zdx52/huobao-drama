@@ -236,6 +236,7 @@ async function generateEnByStages(
   }
 
   // ② 逐组核定：超标/缺失的组单独重写（容错抽取：Agent 又输出全文也只取该组）
+  const failedStages: Array<{ key: string; problem: string }> = []
   for (const stage of EN_STAGES) {
     let cur = stage.segs.map(s => parts.get(s) || '').filter(Boolean).join('\n')
     let problem = groupProblem(cur, stage)
@@ -255,21 +256,45 @@ async function generateEnByStages(
       problem = groupProblem(cur, stage)
     }
     if (problem) {
-      logTaskError('VideoPrompt', 'segment-give-up', { episodeId, storyboardId: sb.id, stage: stage.key, error: problem })
-      return { text: '', ok: false }
+      // 不立刻放弃：记录这一组没压到位，继续处理其他组 —— 最后按「全文是否 ≤ 硬上限」
+      // 统一裁决（个别组略超自己的配额是可以容忍的，不该让整条作废）
+      failedStages.push({ key: stage.key, problem })
+      logTaskProgress('VideoPrompt', 'segment-over-quota', { episodeId, storyboardId: sb.id, stage: stage.key, problem })
     }
-    // 核定后的组内容写回
+    // 核定后的组内容写回（没压到位也写回最后一次的输出，保证拼接时有内容）
     for (const s of stage.segs) {
       const one = extractSections(cur, [s])
       if (one) parts.set(s, one)
     }
   }
 
-  // ③ 按文档顺序拼接
+  // ③ 按文档顺序拼接 + 统一裁决
   const ordered = EN_SECTION_QUOTA.map(([s]) => parts.get(s) || '').filter(Boolean)
   const text = ordered.join('\n')
-  debugLog(episodeId, sb.id, 'assembled', text, { segments: ordered.length, under: text.length <= PROMPT_EN_LIMIT })
-  return { text, ok: text.length > 0 }
+  const under = text.length > 0 && text.length <= PROMPT_EN_LIMIT
+  debugLog(episodeId, sb.id, 'assembled', text, {
+    segments: ordered.length, under, failedStages: failedStages.map(f => f.key),
+  })
+  if (!text) {
+    logTaskError('VideoPrompt', 'segment-give-up', { episodeId, storyboardId: sb.id, stage: 'all', error: '拼接结果为空' })
+    return { text: '', ok: false }
+  }
+  if (!under) {
+    // 全文仍超硬上限 → 真失败（超了会被 H3 拒收，不能落库）
+    logTaskError('VideoPrompt', 'segment-give-up', {
+      episodeId, storyboardId: sb.id, stage: 'all',
+      error: `全文 ${text.length} > ${PROMPT_EN_LIMIT}；未达标的组：${failedStages.map(f => `${f.key}(${f.problem})`).join('; ') || '无'}`,
+    })
+    return { text: '', ok: false }
+  }
+  // 全文在硬上限内 → 接受（个别组略超自身配额可容忍，避免"差一点就全盘失败"）
+  if (failedStages.length) {
+    logTaskProgress('VideoPrompt', 'accepted-with-over-quota', {
+      episodeId, storyboardId: sb.id, len: text.length,
+      stages: failedStages.map(f => `${f.key}: ${f.problem}`),
+    })
+  }
+  return { text, ok: true }
 }
 
 /** 中文工作版（给人看的分镜说明，不直接发给视频模型，无长度压力） */
