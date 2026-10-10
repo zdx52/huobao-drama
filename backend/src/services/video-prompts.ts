@@ -130,14 +130,46 @@ function groupProblem(text: string, stage: { segs: string[]; limit: number }): s
   return null
 }
 
+/** 中英一致性程序校验：返回问题描述（null = 通过）。
+ *  2026-10-10 立：英文版是 H3 唯一消费的版本，中文工作版只是给人看的 —— 两边必须逐拍对齐。
+ *  否则中文版改对了时间轴、英文版还是旧的，成片照旧出问题（sb302 实测：中文 0/2/5/8 秒，
+ *  英文 0/3/6/8 秒 → 第 3 拍只剩 2 秒窗口装 11 字 → 旁白拖尾原样复现）。 */
+function zhEnConsistency(enText: string, zhPrompt?: string): string | null {
+  if (!enText) return '英文版为空'
+  // ① HTML 实体：模型偶发把 <Subject 1> 写成 &lt;Subject 1&gt;，H3 会完全不认识 → 身份绑定失效
+  if (/&lt;|&gt;|&amp;/.test(enText)) {
+    return '英文版出现 HTML 实体（&lt; / &gt; / &amp;）：<Subject N>/<Picture N>/<Audio N>/<d> 必须用裸尖括号'
+  }
+  if (!zhPrompt) return null
+  // ② 时间轴逐拍对齐：中文「X-Y秒」的起点序列 = 英文第 2 拍起的 At 00:XX.000 序列（第 1 拍无时间戳）
+  const zhStarts = [...zhPrompt.matchAll(/^\s*(\d+)\s*-\s*\d+\s*秒\s*[：:]/gm)].map(m => Number(m[1]))
+  const enStarts = [...enText.matchAll(/\[Shot \d+\]\s*At\s*00:(\d+)\.000/g)].map(m => Number(m[1]))
+  const expect = zhStarts.slice(1)
+  if (expect.length && enStarts.length && expect.join(',') !== enStarts.join(',')) {
+    return `英文版每拍起始秒数 [${enStarts.join(',')}] 与中文工作版 [${zhStarts.join(',')}] 不一致；英文第 2 拍起应依次为 [${expect.join(',')}]`
+  }
+  // ③ 台词条数一致：中文「旁白/X说：「…」」句数 = 英文 <d> 条数
+  const zhLines = (zhPrompt.match(/(?:旁白|说)[^「\n]{0,30}「/g) || []).length
+  const enLines = (enText.match(/<d>/g) || []).length
+  if (zhLines !== enLines) {
+    return `中英台词条数不一致：中文工作版 ${zhLines} 句，英文版 <d> ${enLines} 条（必须逐条对应，一句不多一句不少）`
+  }
+  return null
+}
+
 /** 第 1 轮指令：照技能写完整八段（与技能「六段固定、顺序固定」一致，不冲突）。
  *  ⚠️ 关键设计：**给"目标长度"而不是只给"上限"** —— 实测 Agent 对"≤6200"无感
  *  （写成 7746 仍以为没问题），但对"这段约 1500 字符"有明确落点，一次就能写到位。
  *  目标值取配额的 ~80%，合计约 4900，远低于硬上限，留足余量、也避免回头压缩（压缩要重跑，很慢）。 */
-function buildFullPrompt(sb: { id: number; storyboardNumber: number | null }, videoLabel: string, extra?: string): string {
+function buildFullPrompt(sb: { id: number; storyboardNumber: number | null }, videoLabel: string, extra?: string, zhPrompt?: string): string {
   const targets = EN_SECTION_QUOTA
     .map(([s, q]) => `${s.replace(':', '')} 约${Math.round(q * 0.8 / 10) * 10}`)
     .join(' / ')
+  // 2026-10-10：中文工作版先于英文版生成，其时间轴就是本次的基准。
+  // 只把「X-Y秒」那几行抽出来给英文版，避免把整份中文塞进 prompt 稀释注意力。
+  const zhTimeline = zhPrompt
+    ? (zhPrompt.match(/^\s*\d+\s*-\s*\d+\s*秒[：:].*$/gm) || []).join('\n')
+    : ''
   return `请为分镜 #${sb.storyboardNumber}(ID:${sb.id})生成视频提示词 video_prompt_en（H3 官方 Ref2VA 六段式 + 前置 CAST/BLOCKING）。视频模型:${videoLabel}。
 
 请先调用 read_storyboard_context 获取该分镜的画面描述(含【镜头N】子镜头与台词/旁白)、氛围及时长；格式与规则见 video-prompt 技能「英文发送版」节。
@@ -149,7 +181,12 @@ function buildFullPrompt(sb: { id: number; storyboardNumber: number | null }, vi
 - **宁可精炼**：每段只说必要的，形容词能省则省，但必须保住下面这些不许砍的内容。
 
 绝不许为了压长度而砍：<d> 台词、retention_analysis 的 fully_preserved、<Picture N> 的 with 外观、CAST 数量锁、BLOCKING 的 180 轴线。
+${zhTimeline ? `
+🔴🔴 **时间轴基准（本次中文工作版已定，必须逐拍对齐，绝不许自己另算）**：
+中文工作版每一拍的起止秒数如下 —— 英文版第 N 拍的 \`[Shot N] At MM:SS.mmm\` **起始秒数必须与中文第 N 拍的起点逐拍一致**（例：中文第 2 拍 \`2-5秒\` → 英文 \`[Shot 2] At 00:02.000\`；中文第 3 拍 \`5-8秒\` → 英文 \`[Shot 3] At 00:05.000\`）。第 1 拍不带时间戳。**中文版改了时间轴，英文版就必须跟着改。**
 
+${zhTimeline}
+` : ''}
 ${extra ? `\n\n【补充说明 — 必须在生成时逐条满足】\n${extra}\n（若该分镜已有 video_prompt_en，read_storyboard_context 会返回现值，请在其基础上按补充说明改写，不要把补充说明当新剧情编造。）` : ''}
 
 **直接输出提示词正文**：不要解释、前言、结语；不要用代码块围栏；不要调用任何保存工具（后端负责落库）。`
@@ -165,10 +202,14 @@ function buildRewritePrompt(
   problem: string,
   attempt: number,
   extra?: string,
+  zhPrompt?: string,
 ): string {
   const segQuota = stage.segs
     .map(s => `${s.replace(':', '')} ≤${(EN_SECTION_QUOTA.find(([k]) => k === s) || ['', 0])[1]}`)
     .join(' / ')
+  const zhTimeline = zhPrompt
+    ? (zhPrompt.match(/^\s*\d+\s*-\s*\d+\s*秒[：:].*$/gm) || []).join('\n')
+    : ''
   return `分镜 #${sb.storyboardNumber}(ID:${sb.id}) 的 video_prompt_en 需要局部压缩（第 ${attempt} 次）。
 
 问题：${stage.label} 这一组，${problem}。
@@ -189,7 +230,7 @@ function buildRewritePrompt(
 - CAST 里的数量锁（exactly one / no duplicates 那几句）
 - BLOCKING 里的 180 轴线句
 - 主体编号与名称的对应关系
-
+${zhTimeline ? `\n**🔴 时间轴必须与中文工作版逐拍一致（压缩时不许改动任何秒数）**：\n${zhTimeline}\n` : ''}
 ${extra ? `\n**压缩时仍必须继续满足补充说明**：${extra}\n` : ''}输出要求：**只压缩【${stage.label}】**并压到 ≤ ${stage.limit} 字符（组内逐段：${segQuota}）；输出这一组内容（保留段名行）；其他组不用输出；不要解释、前言、结语；不要代码块围栏；不要调用任何保存工具。
 
 【待压缩的原文】
@@ -219,12 +260,13 @@ async function generateEnByStages(
   requestContext: unknown,
   episodeId: number,
   extra?: string,
+  zhPrompt?: string,
 ): Promise<{ text: string; ok: boolean }> {
   // ① 整体生成**一次**（指令已要求一次写到位）。不做整体重试：
   //    实测重试产出的长度几乎一样（7823 → 7823 → 7823，纯等待），
   //    真正有效的压缩是下面「按组局部重写」——代价小得多。
   const res = (await agent.generate(
-    [{ role: 'user', content: buildFullPrompt(sb, videoLabel, extra) }],
+    [{ role: 'user', content: buildFullPrompt(sb, videoLabel, extra, zhPrompt) }],
     { maxSteps: 4, requestContext },
   )) as { text?: string } | undefined
   const full = cleanSegText(res?.text || '')
@@ -245,7 +287,7 @@ async function generateEnByStages(
         episodeId, storyboardId: sb.id, stage: stage.key, attempt: attempt + 1, problem, len: cur.length, limit: stage.limit,
       })
       const res = (await agent.generate(
-        [{ role: 'user', content: buildRewritePrompt(sb, stage, cur, problem, attempt + 1, extra) }],
+        [{ role: 'user', content: buildRewritePrompt(sb, stage, cur, problem, attempt + 1, extra, zhPrompt) }],
         { maxSteps: 4, requestContext },
       )) as { text?: string } | undefined
       const raw = cleanSegText(res?.text || '')
@@ -269,12 +311,53 @@ async function generateEnByStages(
   }
 
   // ③ 按文档顺序拼接 + 统一裁决
-  const ordered = EN_SECTION_QUOTA.map(([s]) => parts.get(s) || '').filter(Boolean)
-  const text = ordered.join('\n')
-  const under = text.length > 0 && text.length <= PROMPT_EN_LIMIT
+  const assemble = () => EN_SECTION_QUOTA.map(([s]) => parts.get(s) || '').filter(Boolean).join('\n')
+  let text = assemble()
   debugLog(episodeId, sb.id, 'assembled', text, {
-    segments: ordered.length, under, failedStages: failedStages.map(f => f.key),
+    segments: EN_SECTION_QUOTA.filter(([s]) => parts.get(s)).length,
+    under: text.length > 0 && text.length <= PROMPT_EN_LIMIT,
+    failedStages: failedStages.map(f => f.key),
   })
+
+  // ③.5 中英一致性程序校验（时间轴逐拍对齐 / 台词条数一致 / 无 HTML 实体）
+  //      不合格 → 自动重写对应的组（时间轴/台词在 detail 组；HTML 实体在它出现的组），
+  //      最多 2 轮；仍不达标则留痕放行（不硬拦，避免像 sb147 那样卡死）
+  {
+    let problem = zhEnConsistency(text, zhPrompt)
+    for (let attempt = 0; problem && attempt < 2; attempt++) {
+      logTaskProgress('VideoPrompt', 'zh-en-fix', {
+        episodeId, storyboardId: sb.id, attempt: attempt + 1, problem,
+      })
+      // 选要重写的组：HTML 实体散落在哪段就重写哪段（实体常见于 subject_definitions）；
+      // 时间轴 / 台词条数的问题都在 detailed_description 所在的 detail 组。
+      const targets = /HTML 实体/.test(problem)
+        ? EN_STAGES.filter(st => st.segs.some(sg => /&lt;|&gt;|&amp;/.test(parts.get(sg) || '')))
+        : [EN_STAGES[EN_STAGES.length - 1]]
+      const list = targets.length ? targets : [EN_STAGES[EN_STAGES.length - 1]]
+      for (const st of list) {
+        const cur = extractSections(text, st.segs) || ''
+        const res2 = (await agent.generate(
+          [{ role: 'user', content: buildRewritePrompt(sb, st, cur, problem, attempt + 1, extra, zhPrompt) }],
+          { maxSteps: 4, requestContext },
+        )) as { text?: string } | undefined
+        const raw = cleanSegText(res2?.text || '')
+        debugLog(episodeId, sb.id, `fix-zhen-${attempt + 1}-${st.key}`, raw, { problem })
+        const got = extractSections(raw, st.segs)
+        if (!got) continue
+        for (const s of st.segs) {
+          const one = extractSections(got, [s])
+          if (one) parts.set(s, one)
+        }
+      }
+      text = assemble()
+      problem = zhEnConsistency(text, zhPrompt)
+    }
+    if (problem) {
+      logTaskProgress('VideoPrompt', 'zh-en-unresolved', { episodeId, storyboardId: sb.id, problem })
+    }
+  }
+
+  const under = text.length > 0 && text.length <= PROMPT_EN_LIMIT
   if (!text) {
     logTaskError('VideoPrompt', 'segment-give-up', { episodeId, storyboardId: sb.id, stage: 'all', error: '拼接结果为空' })
     return { text: '', ok: false }
@@ -373,8 +456,15 @@ export async function startVideoPromptBatch(
       task.current_storyboard_id = sb.id
       logTaskProgress('VideoPrompt', 'batch-shot', { episodeId, storyboardId: sb.id, index: task.completed + task.failed + 1, total: task.total })
       try {
-        // 1) 英文版：整体生成 → 逐组核定（超标组单独重写）→ 全达标才拼
-        const en = await generateEnByStages(agent, sb, videoLabel, requestContext, episodeId, opts.extra)
+        // 1) 中文工作版（**先生成** —— 它是本次时间轴的基准，英文版必须逐拍对齐它）
+        const zh = await generateZhPrompt(agent, sb, videoLabel, requestContext)
+        if (!zh) {
+          task.failed++
+          logTaskError('VideoPrompt', 'batch-shot', { storyboardId: sb.id, error: '中文工作版生成为空' })
+          continue
+        }
+        // 2) 英文版：以中文版时间轴为基准整体生成 → 逐组核定 → 中英一致性程序校验（不合格自动重写）
+        const en = await generateEnByStages(agent, sb, videoLabel, requestContext, episodeId, opts.extra, zh)
         if (!en.ok) {
           task.failed++
           continue
@@ -385,13 +475,6 @@ export async function startVideoPromptBatch(
             storyboardId: sb.id,
             error: `各组达标但拼接后仍超 ${en.text.length} > ${PROMPT_EN_LIMIT}（请核对 EN_SECTION_QUOTA 与技能配额）`,
           })
-        }
-        // 2) 中文工作版
-        const zh = await generateZhPrompt(agent, sb, videoLabel, requestContext)
-        if (!zh) {
-          task.failed++
-          logTaskError('VideoPrompt', 'batch-shot', { storyboardId: sb.id, error: '中文工作版生成为空' })
-          continue
         }
         // 3) 后端落库（Agent 不落库，避免它顺手写别的字段）
         await db.update(schema.storyboards)
