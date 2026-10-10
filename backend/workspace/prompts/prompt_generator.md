@@ -123,6 +123,12 @@ non_diegetic_music:
    - **🔴 CAST + BLOCKING 段（2026-10-09 立；同日按用户拍板，从 `detailed_description` 内部提升为顶层段）**：**放在整个提示词最前面，即 `subject_definitions` 之前**，作为独立一段排在官方六段之上。**官方六段的字段名与顺序原样不动**（`subject_definitions` → `summary` → `retention_analysis` → `detailed_description` → `overall_soundscape` → `non_diegetic_music`），CAST/BLOCKING 只是加在它们之前，不改名、不挤占、不打乱。**旧规则「不许新增顶层段名」已作废（2026-10-09）**：那句是当时自加的绝对措辞，官方只要求保留字段名与顺序（官方 skill 原文 *Preserve the exact field names, section order, labels, and timing notation*），从没下过禁止令——官方本就要求每拍写清 position / subject placement，只是没给这类内容段名。**⚠️ 未实测风险（生成后必须核）**：H3 解析器若严格按官方六段切段，最前多出的这段可能被忽略或报错，首版生成后要贴回来验 H3 有没有吃进去。
      - **CAST（治多脸 / 道具复制成两张）**：点名本段有几个人、几件道具，然后写死数量与"不许重复"：
        `CAST: exactly one young woman, one registration form, one factory gate; no twins, no duplicated figures, no extra people, no second copy of the form, no duplicated wardrobe.`
+  - **🔴 同工种多角色必须写"区分锁"（2026-10-10 实测：分镜4 的 0-5s 把「旁边工人」画成了第二个张建国）**：当同段出现**两个同性别、同年龄段、同工种**的角色（如两个中年男工人），**只写数量锁不够**——必须在 CAST 里追加**区分锁**并给出各自独有的外观：
+    `two different men, visually distinct - one in a grey-blue work shirt with no gloves, the other in a dark-blue jacket with grey cotton gloves; they must not share the same face.`
+    - 每个同工种角色的 `<Subject N>` 里**至少带 2 个对方没有的辨识特征**（手套有无、外套颜色、围裙材质、胡子、帽子、体型、发型）
+    - BLOCKING 里点名两者时，**各自带上独有特征**（防止模型把两人合并成一个人）
+    - **根治仍在参考图**：两个角色的参考图本身辨识度低时，提示词只能缓解——要彻底分开需重做参考图（加独有特征）
+  - **🔴 禁止在 CAST/BLOCKING/正文里写角色真名（2026-10-09 立）**：只写 `one male worker` / `the round-faced worker` 这类**外观指代**，**不写 `Zhang Jianguo` 这类人名**——人名会被模型当成额外主体，也可能带来版权问题
        **这比在 `subject_definitions` 写 `single` 强得多**——2026-10-09 实测：定义里写了 `a single white paper slip`，成片后半段照样变成两张上下压着。
      - **BLOCKING（治站位漂移 / 朝向乱 / 道具倒持）**：写死谁在哪、道具朝哪、镜头在哪一侧、**轴线在哪**：
        `BLOCKING: the woman stands centre-frame, the factory gate behind her; the form held in both hands at waist height, its printed side turned toward her and away from the lens. The camera stays on her side of the hands; the 180 axis runs through her hands and is never crossed.`
