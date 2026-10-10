@@ -8,7 +8,8 @@ import { z } from 'zod'
 import { db, getInsertId, schema } from '../../db/index.js'
 import { eq } from 'drizzle-orm'
 import { now } from '../../utils/response.js'
-import { logTaskProgress, logTaskSuccess } from '../../utils/task-logger.js'
+import { logTaskError, logTaskProgress, logTaskSuccess } from '../../utils/task-logger.js'
+import { PROMPT_EN_LIMIT } from '../../services/video-prompts.js'
 import { getDramaId, getEpisodeId } from '../context.js'
 
 async function syncStoryboardCharacters(storyboardId: number, characterIds: number[]) {
@@ -382,6 +383,29 @@ const updateStoryboard = createTool({
       const v = fields[key]
       if (typeof v === 'string' && (v === 'null' || v === 'undefined' || v === 'NULL' || v === 'Null')) {
         delete fields[key]
+      }
+    }
+
+    // 🔴 2026-10-10 长度硬闸门：video_prompt_en 超 6200 一律拒绝写入。
+    // 为什么拦在这里：单条「生成提示词」按钮走 POST /agent/prompt_generator/chat（裸 Agent），
+    // 不经过 services/video-prompts.ts 的分段治理 —— 实测 Agent 写到 7746 字符仍以为没问题，
+    // 拼上后端 591 字符风格头就是 8337 > H3 的 7000 上限，视频根本发不出去。
+    // 工具层是唯一能覆盖所有写入路径的位置（批量接口 / 单条聊天 / 人工）。
+    if ('video_prompt_en' in fields) {
+      const en = String(fields.video_prompt_en || '')
+      if (en.trim() && en.length > PROMPT_EN_LIMIT) {
+        logTaskError('StoryboardTool', 'video-prompt-en-too-long', {
+          episodeId, storyboardId: storyboard_id, len: en.length, limit: PROMPT_EN_LIMIT,
+        })
+        return {
+          error:
+            `video_prompt_en 超长，已拒绝写入：当前 ${en.length} 字符，上限 ${PROMPT_EN_LIMIT} 字符。` +
+            `MiniMax H3 的 prompt 上限是 7000 字符（官方 hard limit、不可放宽），后端发送时还会拼 591 字符风格头，` +
+            `所以正文必须 ≤ ${PROMPT_EN_LIMIT}。请按 video-prompt 技能「英文发送版」节的逐段配额压缩后重新调用本工具：` +
+            `CAST ≤220 / BLOCKING ≤420 / subject_definitions ≤1850 / summary ≤380 / retention_analysis ≤820 / ` +
+            `detailed_description ≤2050 / overall_soundscape ≤330 / non_diegetic_music ≤50（合计 6120）。` +
+            `不许为了压长度而砍 <d> 台词、retention_analysis 的 fully_preserved、<Picture N> 的 with 外观、CAST 数量锁、BLOCKING 的 180 轴线。`,
+        }
       }
     }
 

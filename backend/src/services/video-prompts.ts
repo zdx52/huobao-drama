@@ -39,7 +39,7 @@ const tasks = new Map<number, VideoPromptBatchStatus>()
 
 /** video_prompt_en 全文硬上限（含换行与标点），与 video-prompt 技能「英文发送版」节一致：
  *  MiniMax H3 官方 7000 字符 hard limit − 发送时拼的风格头 591 − 余量 ≈ 6200。 */
-const PROMPT_EN_LIMIT = 6200
+export const PROMPT_EN_LIMIT = 6200
 /** 每一层（整体生成 / 单组重写）的重试次数上限 */
 const MAX_SEG_RETRY = 2
 
