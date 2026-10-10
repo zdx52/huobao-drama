@@ -289,8 +289,10 @@ const storyboardFields = z.object({
   result: z.string().optional(),
   atmosphere: z.string().optional(),
   image_prompt: z.string().optional(),
-  video_prompt: z.string().optional(),
-  video_prompt_en: z.string().optional(),
+  // 🔴 拆分阶段不接受 video_prompt / video_prompt_en（2026-10-10 用户拍板）
+  // 规则要求 storyboard_breaker 只拆镜头、不写视频提示词，但模型曾在第 1 条违规填入
+  // 半成品提示词（不符合 prompt_generator 的规则，长度也只有正规产出的六成）。
+  // 这里从 schema 层堵死：模型即使回传这两个字段也会被 zod 剥掉，不会落库。
   bgm_prompt: z.string().optional(),
   sound_effect: z.string().optional(),
   duration: z.number().optional(),
@@ -347,7 +349,7 @@ const saveStoryboards = createTool({
           location: sb.location, time: sb.time,
           description: sb.description, result: sb.result,
           atmosphere: sb.atmosphere, imagePrompt: sb.image_prompt,
-          videoPrompt: sb.video_prompt, videoPromptEn: sb.video_prompt_en,
+          // 拆分阶段不动 video_prompt（保留既有值，提示词由 prompt_generator 单独生成）
           bgmPrompt: sb.bgm_prompt,
           soundEffect: sb.sound_effect,
           sceneId: sb.scene_id, duration: sb.duration || 10,
@@ -364,7 +366,7 @@ const saveStoryboards = createTool({
           location: sb.location, time: sb.time,
           description: sb.description, result: sb.result,
           atmosphere: sb.atmosphere, imagePrompt: sb.image_prompt,
-          videoPrompt: sb.video_prompt, videoPromptEn: sb.video_prompt_en,
+          // 拆分阶段不写 video_prompt（留空，由 prompt_generator 批量补齐）
           bgmPrompt: sb.bgm_prompt,
           soundEffect: sb.sound_effect,
           sceneId: sb.scene_id, duration: sb.duration || 10,
