@@ -31,9 +31,9 @@ app.get('/', async (c) => {
     const eps = await db.select().from(schema.episodes)
       .where(and(eq(schema.episodes.dramaId, drama.id), isNull(schema.episodes.deletedAt)))
     const chars = await db.select().from(schema.characters)
-      .where(eq(schema.characters.dramaId, drama.id))
+      .where(and(eq(schema.characters.dramaId, drama.id), isNull(schema.characters.deletedAt)))
     const scns = await db.select().from(schema.scenes)
-      .where(eq(schema.scenes.dramaId, drama.id))
+      .where(and(eq(schema.scenes.dramaId, drama.id), isNull(schema.scenes.deletedAt)))
     return {
       ...toSnakeCase(drama),
       tags: drama.tags ? JSON.parse(drama.tags) : [],
@@ -96,11 +96,11 @@ app.get('/:id', async (c) => {
   const eps = await db.select().from(schema.episodes)
     .where(and(eq(schema.episodes.dramaId, id), isNull(schema.episodes.deletedAt)))
   const chars = await db.select().from(schema.characters)
-    .where(eq(schema.characters.dramaId, id))
+    .where(and(eq(schema.characters.dramaId, id), isNull(schema.characters.deletedAt)))
   const scns = await db.select().from(schema.scenes)
-    .where(eq(schema.scenes.dramaId, id))
+    .where(and(eq(schema.scenes.dramaId, id), isNull(schema.scenes.deletedAt)))
   const prps = await db.select().from(schema.props)
-    .where(eq(schema.props.dramaId, id))
+    .where(and(eq(schema.props.dramaId, id), isNull(schema.props.deletedAt)))
 
   return success(c, {
     ...toSnakeCase(drama),

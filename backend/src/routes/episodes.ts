@@ -231,13 +231,13 @@ app.get('/:id/generation-tasks', async (c) => {
   const epScenes = await db.select().from(schema.episodeScenes).where(eq(schema.episodeScenes.episodeId, episodeId))
   const sceneIds = new Set(epScenes.map(r => r.sceneId))
   // 兼容 scenes.episodeId 直挂的旧数据
-  const directScenes = await db.select().from(schema.scenes).where(eq(schema.scenes.episodeId, episodeId))
+  const directScenes = await db.select().from(schema.scenes).where(and(eq(schema.scenes.episodeId, episodeId), isNull(schema.scenes.deletedAt)))
   directScenes.forEach(s => sceneIds.add(s.id))
 
   const epChars = await db.select().from(schema.episodeCharacters).where(eq(schema.episodeCharacters.episodeId, episodeId))
   const characterIds = new Set(epChars.map(r => r.characterId))
 
-  const dramaProps = await db.select().from(schema.props).where(eq(schema.props.dramaId, ep.dramaId))
+  const dramaProps = await db.select().from(schema.props).where(and(eq(schema.props.dramaId, ep.dramaId), isNull(schema.props.deletedAt)))
   const propIds = new Set(dramaProps.map(p => p.id))
 
   const allTasks = await db.select().from(schema.sysTask).where(eq(schema.sysTask.dramaId, ep.dramaId))
@@ -266,8 +266,8 @@ app.get('/:id/pipeline-status', async (c) => {
   const [ep] = await db.select().from(schema.episodes).where(eq(schema.episodes.id, episodeId))
   if (!ep) return notFound(c, '剧集不存在')
 
-  const chars = await db.select().from(schema.characters).where(eq(schema.characters.dramaId, ep.dramaId))
-  const scenes = await db.select().from(schema.scenes).where(eq(schema.scenes.dramaId, ep.dramaId))
+  const chars = await db.select().from(schema.characters).where(and(eq(schema.characters.dramaId, ep.dramaId), isNull(schema.characters.deletedAt)))
+  const scenes = await db.select().from(schema.scenes).where(and(eq(schema.scenes.dramaId, ep.dramaId), isNull(schema.scenes.deletedAt)))
   const sbs = await db.select().from(schema.storyboards).where(eq(schema.storyboards.episodeId, episodeId))
   const merges = await db.select().from(schema.videoMerges).where(eq(schema.videoMerges.episodeId, episodeId))
 
