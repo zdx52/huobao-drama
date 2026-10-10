@@ -191,6 +191,7 @@
       :title="t('index.deleteDialog.title')"
       :message="t('index.deleteDialog.message', { title: dramaToDelete?.title })"
       :loading="deletingDrama"
+      :checkbox-label="t('index.deleteDialog.purgeFiles')"
       @confirm="confirmDelDrama"
       @cancel="dramaToDelete = null"
     />
@@ -314,12 +315,12 @@ async function create() {
   }
 }
 
-async function confirmDelDrama() {
+async function confirmDelDrama(purgeFiles = false) {
   const d = dramaToDelete.value
   if (!d) return
   try {
     deletingDrama.value = true
-    await dramaAPI.del(d.id)
+    await dramaAPI.del(d.id, purgeFiles === true)
     toast.success(t('index.deleted'))
     dramaToDelete.value = null
     load()

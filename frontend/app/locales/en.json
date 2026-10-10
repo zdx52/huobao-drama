@@ -144,7 +144,8 @@
     },
     "deleteDialog": {
       "title": "Delete project",
-      "message": "Delete “{title}”? Episodes, storyboards and generation records will be removed. This cannot be undone."
+      "message": "Delete “{title}”? Episodes, storyboards and generation records will be removed. This cannot be undone.",
+      "purgeFiles": "Also delete all images and videos of this drama (irreversible)"
     },
     "time": {
       "justNow": "Just now",
@@ -205,7 +206,8 @@
       "added": "Episode added"
     },
     "epDelete": {
-      "message": "Delete “{title}”? It will be hidden from the list and its storyboards and generation records will no longer be accessible."
+      "message": "Delete “{title}”? It will be hidden from the list and its storyboards and generation records will no longer be accessible.",
+      "purgeFiles": "Also delete this episode's generated images and videos (irreversible)"
     },
     "assets": {
       "emptyTitle": "No assets yet",
@@ -485,6 +487,20 @@
     "skillDelete": {
       "title": "Delete Skill",
       "message": "Delete skill “{id}”? The corresponding Agent will fall back to its built-in default prompt."
+    },
+    "cleanup": {
+      "title": "Clean up leftover data",
+      "desc": "Deleting a drama/episode used to only hide its records — generated images and videos stayed on disk. Scan and clean those orphan files here.",
+      "scanLabel": "Scan for junk files",
+      "scanHint": "Scanning is read-only. You choose whether to delete afterwards.",
+      "scanBtn": "Scan now",
+      "scanning": "Scanning…",
+      "found": "Found {n} orphan files, {size} total",
+      "clean": "No junk files found — all clean",
+      "purgeBtn": "Delete these files",
+      "purged": "Removed {n} files",
+      "confirmTitle": "Confirm cleanup",
+      "confirmMessage": "This deletes {n} files ({size}) and cannot be undone. Continue?"
     }
   },
   "episode": {

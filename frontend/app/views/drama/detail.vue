@@ -675,6 +675,7 @@
       :title="t('detail.ep.deleteTitle')"
       :message="t('detail.epDelete.message', { title: episodeToDelete?.title || t('detail.ep.episodeN', { n: episodeToDelete?.episode_number || episodeToDelete?.episodeNumber }) })"
       :loading="deletingEpisode"
+      :checkbox-label="t('detail.epDelete.purgeFiles')"
       @confirm="confirmDelEpisode"
       @cancel="episodeToDelete = null"
     />
@@ -792,12 +793,12 @@ async function addEpisode() {
   }
 }
 
-async function confirmDelEpisode() {
+async function confirmDelEpisode(purgeFiles = false) {
   const ep = episodeToDelete.value
   if (!ep) return
   try {
     deletingEpisode.value = true
-    await episodeAPI.del(ep.id)
+    await episodeAPI.del(ep.id, purgeFiles === true)
     toast.success(t('index.deleted'))
     episodeToDelete.value = null
     load()

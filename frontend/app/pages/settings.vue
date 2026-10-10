@@ -272,6 +272,39 @@
             <p class="config-empty">{{ t('settings.storage.note') }}</p>
             <p v-if="!isDesktopMode" class="config-empty">{{ t('settings.storage.serverNote') }}</p>
           </section>
+
+          <!-- 2026-10-10 清理历史遗留数据：删集/删剧过去只打标记，图片视频会留在磁盘 -->
+          <section class="card svc-group" style="margin-top: 16px">
+            <div class="svc-group-head">
+              <div class="svc-group-heading">
+                <span class="svc-group-title">{{ t('settings.cleanup.title') }}</span>
+                <div class="svc-group-sub">{{ t('settings.cleanup.desc') }}</div>
+              </div>
+            </div>
+            <div class="config-row">
+              <div class="provider-badge style-badge"><Trash2 :size="15" /></div>
+              <div class="config-main">
+                <div class="config-line">
+                  <span class="config-name">{{ t('settings.cleanup.scanLabel') }}</span>
+                  <span v-if="cleanupResult" class="tag mono">{{ cleanupResult.count }}</span>
+                </div>
+                <div class="config-sub">{{ t('settings.cleanup.scanHint') }}</div>
+                <div v-if="cleanupResult" class="config-sub">
+                  <template v-if="cleanupResult.count">{{ t('settings.cleanup.found', { n: cleanupResult.count, size: formatBytes(cleanupResult.bytes) }) }}</template>
+                  <template v-else>{{ t('settings.cleanup.clean') }}</template>
+                </div>
+                <div class="cleanup-actions">
+                  <button class="btn btn-sm" :disabled="scanningCleanup" @click="scanCleanup">
+                    <Loader2 v-if="scanningCleanup" :size="13" class="animate-spin" />
+                    {{ scanningCleanup ? t('settings.cleanup.scanning') : t('settings.cleanup.scanBtn') }}
+                  </button>
+                  <button v-if="cleanupResult && cleanupResult.count" class="btn btn-sm confirm-danger-btn" :disabled="purgingCleanup" @click="purgeCleanupOpen = true">
+                    {{ t('settings.cleanup.purgeBtn') }}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </section>
         </div>
 
         <!-- ===== 关于更新 ===== -->
@@ -689,7 +722,7 @@ import BaseSelect from '~/components/BaseSelect.vue'
 import { toast } from 'vue-sonner'
 import { toastError } from '~/composables/useToast'
 import { useI18n } from 'vue-i18n'
-import { aiConfigAPI, promptAPI, skillsAPI, storageAPI, stylePresetAPI, settingsAPI, serverUpdateAPI } from '~/composables/useApi'
+import { aiConfigAPI, promptAPI, skillsAPI, storageAPI, stylePresetAPI, settingsAPI, serverUpdateAPI, maintenanceAPI } from '~/composables/useApi'
 import { useDesktopBridge } from '~/composables/useDesktopBridge'
 import { useMigrateState } from '~/composables/useMigrateState'
 import { useTheme } from '~/composables/useTheme'
@@ -698,6 +731,30 @@ import { startTour, autoTour } from '~/composables/useTour'
 import { confirmUnifiedLanguage } from '~/composables/useUnifiedLanguage'
 
 const { t, locale } = useI18n()
+
+// 2026-10-10 清理历史遗留数据（扫描孤儿文件 → 确认 → 删）
+const scanningCleanup = ref(false)
+const purgingCleanup = ref(false)
+const purgeCleanupOpen = ref(false)
+const cleanupResult = ref(null)
+
+async function scanCleanup() {
+  scanningCleanup.value = true
+  try {
+    cleanupResult.value = await maintenanceAPI.scanOrphans()
+  } catch (e) { toastError(e) } finally { scanningCleanup.value = false }
+}
+
+async function doPurgeCleanup() {
+  purgingCleanup.value = true
+  try {
+    const r = await maintenanceAPI.purgeOrphans()
+    toast.success(t('settings.cleanup.purged', { n: (r && r.removed) || 0 }))
+    purgeCleanupOpen.value = false
+    cleanupResult.value = null
+    loadStorage?.()
+  } catch (e) { toastError(e) } finally { purgingCleanup.value = false }
+}
 
 const showBrandImage = ref(true)
 const tab = ref('ai')
@@ -1395,6 +1452,7 @@ onBeforeUnmount(stopUsagePoll)
 </script>
 
 <style scoped>
+.cleanup-actions { display: flex; gap: 8px; margin-top: 12px; }
 .settings-page { display: flex; flex-direction: column; height: 100%; background: var(--bg-base); }
 
 .settings-layout { display: flex; flex: 1; min-height: 0; }

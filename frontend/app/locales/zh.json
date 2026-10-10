@@ -144,7 +144,8 @@
     },
     "deleteDialog": {
       "title": "删除项目",
-      "message": "确定删除「{title}」？项目下的剧集、分镜与生成记录将一并删除，此操作不可恢复。"
+      "message": "确定删除「{title}」？项目下的剧集、分镜与生成记录将一并删除，此操作不可恢复。",
+      "purgeFiles": "同时删除该剧的所有图片和视频（不可恢复）"
     },
     "time": {
       "justNow": "刚刚",
@@ -205,7 +206,8 @@
       "added": "已添加新集"
     },
     "epDelete": {
-      "message": "确定删除「{title}」？删除后不可在列表中查看，其分镜与生成记录将不再可访问。"
+      "message": "确定删除「{title}」？删除后不可在列表中查看，其分镜与生成记录将不再可访问。",
+      "purgeFiles": "同时删除该集生成的图片和视频（不可恢复）"
     },
     "assets": {
       "emptyTitle": "还没有任何素材",
@@ -485,6 +487,20 @@
     "skillDelete": {
       "title": "删除 Skill",
       "message": "确定删除 Skill「{id}」？删除后对应 Agent 将回退到内置默认提示词。"
+    },
+    "cleanup": {
+      "title": "清理历史遗留数据",
+      "desc": "删除作品/剧集时过去只会隐藏记录，生成的图片和视频会留在磁盘上。这里可以扫描并清理这些没有归属的文件。",
+      "scanLabel": "扫描垃圾文件",
+      "scanHint": "只扫描，不会自动删除。扫描后可选择清理。",
+      "scanBtn": "开始扫描",
+      "scanning": "扫描中…",
+      "found": "发现 {n} 个无归属文件，共 {size}",
+      "clean": "没有发现垃圾文件，很干净",
+      "purgeBtn": "清理这些文件",
+      "purged": "已清理 {n} 个文件",
+      "confirmTitle": "确认清理垃圾文件",
+      "confirmMessage": "将删除 {n} 个文件（{size}），删除后不可恢复。确定继续？"
     }
   },
   "episode": {

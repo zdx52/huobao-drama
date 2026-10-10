@@ -7,9 +7,13 @@
         </div>
         <h2 class="confirm-title">{{ effectiveTitle }}</h2>
         <p class="confirm-message">{{ message }}</p>
+        <label v-if="checkboxLabel" class="confirm-checkbox">
+          <input type="checkbox" v-model="checked" :disabled="loading" />
+          <span>{{ checkboxLabel }}</span>
+        </label>
         <div class="confirm-actions">
           <button type="button" class="btn" :disabled="loading" @click="emit('cancel')">{{ t('common.cancel') }}</button>
-          <button type="button" class="btn confirm-danger-btn" :disabled="loading" @click="emit('confirm')">
+          <button type="button" class="btn confirm-danger-btn" :disabled="loading" @click="emit('confirm', checked)">
             <Loader2 v-if="loading" :size="13" class="animate-spin" />
             {{ loading ? effectiveLoadingText : effectiveConfirmText }}
           </button>
@@ -33,9 +37,15 @@ const props = defineProps({
   confirmText: { type: String, default: '' },
   loadingText: { type: String, default: '' },
   loading: { type: Boolean, default: false },
+  // 2026-10-10：可选勾选框（删集/删剧时问「是否连图片视频一起删」）
+  checkboxLabel: { type: String, default: '' },
+  checkboxDefault: { type: Boolean, default: false },
 })
 
 const emit = defineEmits(['confirm', 'cancel'])
+
+const checked = ref(false)
+watch(() => props.open, (v) => { if (v) checked.value = props.checkboxDefault })
 
 const effectiveTitle = computed(() => props.title || t('components.confirmDialog.title'))
 const effectiveConfirmText = computed(() => props.confirmText || t('common.delete'))
@@ -87,6 +97,21 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown))
   max-width: 320px;
   word-break: break-word;
 }
+.confirm-checkbox {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-top: 14px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--surface-2, rgba(0,0,0,0.03));
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--text-2);
+  text-align: left;
+  cursor: pointer;
+}
+.confirm-checkbox input { margin-top: 2px; flex: none; cursor: pointer; }
 .confirm-actions {
   display: flex;
   gap: 10px;

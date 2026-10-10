@@ -40,13 +40,15 @@ export const dramaAPI = {
   get: (id: number) => api.get(`/dramas/${id}`),
   create: (data: any) => api.post('/dramas', data),
   update: (id: number, data: any) => api.put(`/dramas/${id}`, data),
-  del: (id: number) => api.del(`/dramas/${id}`),
+  // 2026-10-10：purgeFiles=true → 连同该剧图片/视频一起删（后端 ?purge_files=1）
+  del: (id: number, purgeFiles = false) => api.del(`/dramas/${id}${purgeFiles ? '?purge_files=1' : ''}`),
 }
 
 export const episodeAPI = {
   create: (data: any) => api.post('/episodes', data),
   update: (id: number, data: any) => api.put(`/episodes/${id}`, data),
-  del: (id: number) => api.del(`/episodes/${id}`),
+  // 2026-10-10：purgeFiles=true → 连同该集分镜图/视频一起删（后端 ?purge_files=1）
+  del: (id: number, purgeFiles = false) => api.del(`/episodes/${id}${purgeFiles ? '?purge_files=1' : ''}`),
   characters: (id: number) => api.get(`/episodes/${id}/characters`),
   scenes: (id: number) => api.get(`/episodes/${id}/scenes`),
   props: (id: number) => api.get(`/episodes/${id}/props`),
@@ -56,6 +58,12 @@ export const episodeAPI = {
   extractStatus: (id: number) => api.get(`/episodes/${id}/extract-status`),
   generateVideoPrompts: (id: number, model?: string, configId?: number, storyboardIds?: number[], extra?: string) => api.post(`/episodes/${id}/generate-video-prompts`, { model: model || undefined, config_id: configId || undefined, storyboard_ids: storyboardIds?.length ? storyboardIds : undefined, extra: extra || undefined }),
   videoPromptsStatus: (id: number) => api.get(`/episodes/${id}/video-prompts-status`),
+}
+
+// 2026-10-10 存储维护：扫描 / 清理历史遗留的孤儿文件
+export const maintenanceAPI = {
+  scanOrphans: () => api.get<{ count: number; bytes: number; sample: any[] }>('/maintenance/orphans'),
+  purgeOrphans: () => api.post('/maintenance/orphans/purge'),
 }
 
 export const storyboardAPI = {
