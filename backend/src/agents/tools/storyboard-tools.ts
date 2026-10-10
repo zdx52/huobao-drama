@@ -184,13 +184,35 @@ const readStoryboardContext = createTool({
           .where(eq(schema.storyboardCharacters.storyboardId, sb.id))
         const sbPropLinks = await db.select().from(schema.storyboardProps)
           .where(eq(schema.storyboardProps.storyboardId, sb.id))
+        const sbCharIds = links.map(link => link.characterId)
+        const sbPropIds = sbPropLinks.map(link => link.propId)
+        // 参考图实际编号表（与前端 getShotReferenceAssetKeys 同序：场景 → 角色 id 升序 → 道具 id 升序）。
+        // 2026-10-10 实测事故：sb148 的 0-5s 出现两个张建国 —— LLM 拿不到这个顺序，按「谁先出场」
+        // 猜编号，把张建国写成 <Picture 2>（实际是林巧），编号错位 → 身份全乱。这里显式给出，
+        // 规则同时要求 <Picture N> 必须照抄本表，不许按出场顺序推断。
+        const refOrder: Array<{ picture: number; kind: string; id: number; name: string }> = []
+        let picNo = 1
+        if (sb.sceneId) {
+          const sc = scns.find((s: any) => s.id === sb.sceneId)
+          if (sc) refOrder.push({ picture: picNo++, kind: 'scene', id: sc.id, name: sc.location || '' })
+        }
+        for (const cid of [...sbCharIds].sort((a, b) => a - b)) {
+          const ch = chars.find((c: any) => c.id === cid)
+          if (ch) refOrder.push({ picture: picNo++, kind: 'character', id: ch.id, name: ch.name })
+        }
+        for (const pid of [...sbPropIds].sort((a, b) => a - b)) {
+          const pr = prps.find((p: any) => p.id === pid)
+          if (pr) refOrder.push({ picture: picNo++, kind: 'prop', id: pr.id, name: pr.name })
+        }
         return {
           id: sb.id,
           shot_number: sb.storyboardNumber,
           title: sb.title || '',
           scene_id: sb.sceneId,
-          character_ids: links.map(link => link.characterId),
-          prop_ids: sbPropLinks.map(link => link.propId),
+          character_ids: sbCharIds,
+          prop_ids: sbPropIds,
+          // 🔴 <Picture N> 的权威编号表 —— 写 video_prompt 时逐条照抄，禁止按出场顺序推断
+          reference_order: refOrder,
           shot_type: sb.shotType || '',
           duration: sb.duration || 0,
           description: sb.description || '',
