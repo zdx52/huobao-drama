@@ -59,9 +59,15 @@ General rules:
 The MiniMax H3 prompt limit is **7000 characters — an official hard limit that cannot be relaxed** (RunDiffusion / AtlasCloud / MiniMax official GitHub all state this), and the backend prepends a photorealistic style header before sending, so headroom is mandatory.
 **Going over means the request is rejected outright and no video is produced** (measured 2026-10-09: sb147 reached 7608 characters → 8403 after concatenation → error "prompt too long: MiniMax H3 limit 7000 characters, current 8403").
 
-Per-section quotas (allocate to these; count each section when done):
-**When over budget, cut in this order**: ① redundant clauses in `summary` ② `overall_soundscape` effects already stated in the body ③ description in `BLOCKING` that duplicates the body (e.g. "face out of shot" already written in a beat) ④ appearance modifiers in `subject_definitions`.
-**Never cut**: `<d>` dialogue, any `fully_preserved` line in `retention_analysis`, `<Picture N>` and the `with` clause in `subject_definitions`, the count lock in `CAST`, the orientation and 180-axis in `BLOCKING`.
+Per-section quotas (allocate to these; count each section when done; **reconfigured 2026-10-10 evening to the official wording** — the self-added CAST/BLOCKING sections are gone, back to the official six):
+- `subject_definitions` ≤ 1700
+- `summary` ≤ 340 (official: one short English paragraph)
+- `retention_analysis` ≤ 760
+- `detailed_description` ≤ 2500 (**official: 350–500 English words ≈ 1750–2500 characters** — do not write it short)
+- `overall_soundscape` ≤ 300 (official: 1–4 sentences)
+- `non_diegetic_music` ≤ 120 (official: 1–3 sentences; write `N/A` when there is no score)
+- **Total 5720 (+ 5 newlines = 5725) ≤ 6200 = the hard full-prompt limit**
+**Never cut**: `<d>` dialogue, every `fully_preserved` line in `retention_analysis`, the `<Picture N>` and `with` clause in `subject_definitions`.
 
 Six section names, fixed order, one per line:
 

@@ -59,7 +59,16 @@ model: ""
 MiniMax H3 的 prompt 上限是 **7000 字符，这是官方 hard limit、不可放宽**（RunDiffusion / AtlasCloud / MiniMax 官方 GitHub 口径一致），后端发送时还会在前面拼一段 photorealistic 风格头，所以必须留余量。
 **超限直接被拒、整段生成不出来**（2026-10-09 实测：sb147 写到 7608 字符 → 拼接后 8403 → 报「提示词超长：MiniMax H3 上限 7000 字符，当前 8403」）。
 
-各段配额（按此分配，写完逐段数）：
+各段配额（按此分配，写完逐段数；2026-10-10 晚按官方口径重配 —— 已撤掉自加的 CAST/BLOCKING，回到官方六段）：
+- `subject_definitions` ≤ 1700
+- `summary` ≤ 340（官方：一段短英文）
+- `retention_analysis` ≤ 760
+- `detailed_description` ≤ 2500（**官方要求 350–500 英文词 ≈ 1750–2500 字符**，别写太短）
+- `overall_soundscape` ≤ 300（官方：1–4 句）
+- `non_diegetic_music` ≤ 120（官方：1–3 句；没有配乐写 `N/A`）
+- **合计 5720（+ 5 个换行 = 5725）≤ 6200 全文硬上限**
+**超了就砍，顺序**：① `summary` 的冗余从句 ② `overall_soundscape` 与正文重复的音效 ③ `subject_definitions` 的外观修饰词 ④ `detailed_description` 里重复的动作铺垫。
+**绝不许砍**：`<d>` 台词、`retention_analysis` 里每条 `fully_preserved`、`subject_definitions` 的 `<Picture N>` 与 `with` 外观。
    - **🔴 `<Picture N>` 编号 = `read_storyboard_context` 返回的 `reference_order` 表，逐条照抄（2026-10-10 立，实测事故）**：本管线的参考图顺序固定为 **场景第 1 张 → 角色（id 升序）→ 道具最后**（与 `@图片N` 注入顺序、RefMod 卡槽 `mod_N` 三者同号）。
   - **写法**：**先读该分镜的 `reference_order`**，表里每行的 `picture` 就是编号、`name` 就是该编号对应的资产 —— 按它写 `<Picture N>`，**逐条照抄**
   - **万一没有 `reference_order` 字段，就按这个规则自己算**：**场景（1 张）→ 角色（按 `character_ids` 里的 id 从小到大）→ 道具（按 id 从小到大）**。注意是 **id 升序**，不是绑定先后、更不是出场先后
