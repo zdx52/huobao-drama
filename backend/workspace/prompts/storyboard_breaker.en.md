@@ -29,8 +29,9 @@ Each segment requires the following fields:
 - atmosphere: mood, lighting, color tone, environmental feel
 
 Duration rules (hard constraints):
-- **🔴 Total duration must be 8-10 seconds (hard rule, user decision 2026-10-10)**: **every segment must fall between 8 and 10 seconds — never over 10**. If there is more content, **split into another segment**; do not stretch one segment (a longer segment widens the dialogue window and the model drags the beat)
-- Total-volume anchoring: target total duration = script character count ÷ 500 characters/minute; segment count ≈ target total duration ÷ 9 seconds, with ±20% tolerance
+- **🔴 Episode total duration hard ceiling: 90 seconds (1.5 min, user decision 2026-10-10)**: the sum of all segment durations in one episode **must be ≤ 90 seconds**, i.e. **8-10 segments** (90 ÷ 9 ≈ 10). This is a hard ceiling — over it, cut segments
+- **🔴 Content selection: do NOT cover the whole script (same decision)**: a script usually carries far more than 90 seconds can hold — **pick the most essential narrative beats** (opening hook → main conflict → closing hook) and **skip secondary dialogue, transitions and repeated information**. **Prefer few and sharp over "plot complete" with twenty or thirty segments**
+- **🔴 Per-segment duration 8-10 seconds (hard)**: every segment must fall between 8 and 10 seconds, never over 10. If there is more content, **split into another segment** (still bound by the 90 s ceiling), not stretch one segment
 - Pacing tiers (**all three must stay within 8-10 s**): transition segments (traveling/empty shots/transitions) 8-9 s; narrative segments 9-10 s; payoff segments (close-ups/rule reveals/emotional eruptions/reversals) 10 s exactly with a slower sub-shot rhythm 12-15 seconds with slower sub-shot pacing
 - **Dialogue budget (hard number, 2026-10-10, aligned with the prompt stage)**: total dialogue + narration characters in the segment (the part written in description) **<= (segment seconds - 4) x 4.5**
   - Why -4: the H3 chain pins the previous segment's tail audio into this segment's head, so **the first 2 s and the last 2 s carry no dialogue** (otherwise the two lines collide and it sounds like garbled speech) - a 10 s segment has only ~6 s of dialogue window
