@@ -735,7 +735,8 @@
       "promptGenerated": "分镜 #{n} 视频提示词已生成",
       "promptExtraPlaceholder": "补充说明（可留空）：写下你要改的地方，如「多拍手部特写」「旁白放到第 5 秒」「结尾加一个回头」",
       "showEnPrompt": "查看英文发送版",
-      "hideEnPrompt": "收起英文发送版"
+      "hideEnPrompt": "收起英文发送版",
+      "needPromptsAfterBreak": "拆分完成，有 {n} 个分镜还没有视频提示词，需要时点「批量补齐提示词」"
     },
     "ref": {
       "title": "参考素材",

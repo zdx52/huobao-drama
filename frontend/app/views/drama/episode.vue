@@ -2927,12 +2927,15 @@ function doBreakdown() {
 - 只有纯环境空镜头才可以不绑定角色`, dramaId, epId.value, onBreakdownDone, chatModelOverride(), chatConfigId())
 }
 
-/** 拆分完成后刷新并自动补齐缺失的视频提示词（兜住 Agent 漏写/截断） */
+/** 拆分完成后刷新（2026-10-10 用户拍板：不再自动生成全部提示词） */
 async function onBreakdownDone() {
   await refresh()
+  // 原实现在这里自动调 batchVideoPrompts() 补齐缺失提示词 —— 整集 28 条串行生成要 30~40 分钟，
+  // 用户以为是「拆分卡住了」（两条流水线接力，看不出分界）。
+  // 改为只提示条数，由用户自己决定什么时候点「批量补齐提示词」。
   const missing = sbs.value.filter(sb => !((sb.video_prompt || sb.videoPrompt || '').trim()
     && (sb.video_prompt_en || sb.videoPromptEn || '').trim()))
-  if (missing.length) batchVideoPrompts()
+  if (missing.length) toast.info(t('episode.sb.needPromptsAfterBreak', { n: missing.length }))
 }
 
 // 按需为单个分镜生成视频提示词：由 prompt_generator 读取分镜字段生成并保存到 video_prompt / video_prompt_en

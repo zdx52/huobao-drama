@@ -735,7 +735,8 @@
       "promptGenerated": "分镜 #{n} の動画プロンプトを生成しました",
       "promptExtraPlaceholder": "補足説明（空欄可）：変更したい点を記入してください。例「手のクローズアップを増やす」「ナレーションを5秒に移動」「最後に振り返る」",
       "showEnPrompt": "英語送信版を表示",
-      "hideEnPrompt": "英語送信版を閉じる"
+      "hideEnPrompt": "英語送信版を閉じる",
+      "needPromptsAfterBreak": "分解が完了しました。{n} 個のカットに動画プロンプトがまだありません。必要なら「一括でプロンプトを補完」を押してください。"
     },
     "ref": {
       "title": "参照素材",
