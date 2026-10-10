@@ -713,6 +713,15 @@
       @confirm="confirmDelSkill"
       @cancel="skillToDelete = null"
     />
+    <!-- 2026-10-10 清理历史遗留数据的二次确认（缺了这个组件，点「清理这些文件」不会有任何反应） -->
+    <ConfirmDialog
+      :open="purgeCleanupOpen"
+      :title="t('settings.cleanup.confirmTitle')"
+      :message="t('settings.cleanup.confirmMessage', { n: (cleanupResult && cleanupResult.count) || 0, size: formatBytes((cleanupResult && cleanupResult.bytes) || 0) })"
+      :loading="purgingCleanup"
+      @confirm="doPurgeCleanup"
+      @cancel="purgeCleanupOpen = false"
+    />
   </div>
 </template>
 

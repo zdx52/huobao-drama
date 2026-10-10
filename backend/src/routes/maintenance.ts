@@ -78,6 +78,8 @@ async function scanOrphans() {
     try { ents = fs.readdirSync(dir, { withFileTypes: true }) } catch { return }
     for (const e of ents) {
       const abs = path.join(dir, e.name)
+      // 跳过非「生成物」目录：debug/ 是诊断日志（还在被写入）、uploads/ 是用户上传的原始素材
+      if (e.isDirectory() && (e.name === 'debug' || e.name === 'uploads')) continue
       if (e.isDirectory()) walk(abs)
       else if (e.isFile()) {
         if (refs.has(e.name)) continue
