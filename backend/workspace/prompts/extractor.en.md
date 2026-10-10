@@ -14,7 +14,7 @@ Workflow:
 6. For each character: if one with the same name already exists, merge and update it; otherwise create a new one
 7. Call save_dedup_characters to save the characters (deduplicated merge; automatically handles creation and updates, and links them to the current episode)
 8. Analyze the script content and extract all scene information involved in this episode
-9. For each scene: if one with the same location + time period already exists, reuse it; otherwise create a new one
+9. For each scene: if one with the same location already exists, reuse it; otherwise create a new one
 10. Call save_dedup_scenes to save the scenes (deduplicated merge; automatically handles creation and reuse, and links them to the current episode)
 11. Extract the key props of this episode — both of the following conditions must be met, neither is optional:
     a) Directly drives the plot: the item's appearance, handover, damage, or discovery triggers a plot turn (e.g. a murder weapon, a token, a key document, a love-token gift, evidence);
@@ -26,10 +26,11 @@ Workflow:
 
 Deduplication rules:
 - Characters/props: exact match by name; on a match, keep the existing one (merge information). When a name carries a parenthesized qualifier or alias, compare by the main part before the parentheses (e.g. "Lin Xiaoyu (protagonist)" and "Lin Xiaoyu" are the same character — prefer reusing the existing project entry, do not create a duplicate). The normalized_name returned by read_existing_characters / read_existing_props is the normalized name and can be used for this judgment
-- Scenes: exact match on [location + time period] (location compared ignoring whitespace/case); the same location at a different time period counts as a new scene
+- Scenes: match on **[location]** (compared ignoring whitespace/case); **only one scene per location** — do not split by time period. Time-of-day differences (dawn/noon/night) are carried by the storyboard prompt, not by extra scene entries
 
 Extraction requirements:
 - Only extract characters, scenes, and props that actually appear in, or are explicitly mentioned in, the current episode and are narratively effective for it
+- **Characters record baseline appearance only**: temporary states within this episode — injury, a change of clothes, dirt, being soaked by rain, sweating, dishevelled hair — **must never be written into appearance / styling**, and must not trigger a new character entry. Test: **does it still hold when this episode ends?** Yes (a permanent change of work uniform, ageing, a lasting injury) → may be written into the asset; no (rain dries, a wound heals, a one-off change of clothes) → **do not write it**; the storyboard body carries it instead. Reason: writing it into the asset pollutes the baseline, so regenerating the character sheet later would change the character's look
 - A character needs only two core description fields: appearance (looks: age impression, facial features, physique, bearing, etc. — convert personality traits into outward bearing and expression woven into the appearance description; do not output a separate personality field) and styling (hair, clothing, makeup, accessories, etc.)
 - A scene needs only two core description fields: prompt (scene description: space, set dressing, period texture, key visual elements, etc.) and lighting (scene lighting: light sources, color tone, brightness contrast, mood, etc.)
 - Prop fields: name (prop name), type (category: daily / weapon / transportation / decoration / document, etc.), description (physical appearance of the item only — material, color, shape, size, degree of wear, signs of damage, etc.; do not describe its plot purpose or its relation to characters or anything else). Props do not need an image prompt; the final prompt will be generated later by the prompt-generation Agent

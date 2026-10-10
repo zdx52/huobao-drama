@@ -273,14 +273,16 @@ const saveDedupScenes = createTool({
         .where(eq(schema.scenes.dramaId, dramaId)))
         .filter(s => !s.deletedAt)
       const normLocation = normalizeLocation(scene.location)
-      const existing = scenesInProject.find(s => s.location === scene.location && s.time === (scene.time || ''))
-        || (normLocation ? scenesInProject.find(s => normalizeLocation(s.location) === normLocation && s.time === (scene.time || '')) : undefined)
+      // 同地点即复用（2026-10-10 用户拍板：不再按时段拆成多条场景；时段差异交给分镜提示词）
+      const existing = scenesInProject.find(s => s.location === scene.location)
+        || (normLocation ? scenesInProject.find(s => normalizeLocation(s.location) === normLocation) : undefined)
 
       if (existing) {
         // 已存在完全匹配的场景：关联并补齐描述/光影
         await db.update(schema.scenes).set({
           prompt: scene.prompt || scene.description || existing.prompt,
           lighting: scene.lighting || existing.lighting,
+          // time 不覆盖：保留首次登记的时段（仅作参考，不参与去重）
           updatedAt: ts,
         }).where(eq(schema.scenes.id, existing.id))
         await linkSceneToEpisode(episodeId, existing.id)
