@@ -488,7 +488,7 @@
               <span class="tag mono">{{ t('episode.sb.segmentStat', { n: sbs.length, dur: totalDuration }) }}</span>
               <span class="tag mono" :title="t('episode.vid.aspectRatio')">{{ dramaAspectRatio }}</span>
               <div class="ml-auto flex gap-1">
-                <button class="btn btn-sm" :disabled="rn" @click="doBreakdown">
+                <button class="btn btn-sm" :disabled="rn" @click="sbs.length ? (breakdownConfirm = true) : doBreakdown()">
                   <Loader2 v-if="rt === 'storyboard_breaker'" :size="11" class="animate-spin" />
                   <svg v-else width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
                   {{ sbs.length ? t('episode.sb.rebreak') : t('episode.sb.startBreak') }}
@@ -1456,6 +1456,14 @@
         :loading="assetDelete.loading"
         @confirm="confirmDeleteAsset"
         @cancel="assetDelete.open = false"
+      />
+      <ConfirmDialog
+        :open="breakdownConfirm"
+        :title="t('episode.sb.confirmBreakTitle')"
+        :message="t('episode.sb.confirmBreakMessage', { n: sbs.length })"
+        :confirm-text="t('episode.sb.confirmBreakOk')"
+        @confirm="confirmBreakdown"
+        @cancel="breakdownConfirm = false"
       />
     </main>
     </div>
@@ -2903,6 +2911,14 @@ function pollVideoPromptBatch(attempts = 240) {
   }
   setTimeout(() => tick(attempts), 2500)
 }
+// 2026-10-10 用户要求：重新拆分一点就执行（且会 replace_existing 清空旧分镜）不安全 → 加确认弹窗。
+// 首次拆分（无旧分镜）不拦，有旧分镜才弹。
+const breakdownConfirm = ref(false)
+function confirmBreakdown() {
+  breakdownConfirm.value = false
+  doBreakdown()
+}
+
 function doBreakdown() {
   const charList = chars.value.length
     ? chars.value.map(c => `${c.name}(ID:${c.id})`).join('、')

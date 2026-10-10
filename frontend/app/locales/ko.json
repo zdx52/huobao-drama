@@ -736,7 +736,10 @@
       "promptExtraPlaceholder": "보충 설명 (비워도 됨): 수정할 점을 적어 주세요. 예: 「손 클로즈업 추가」「내레이션을 5초로 이동」「마지막에 뒤돌아보기」",
       "showEnPrompt": "영어 전송 버전 보기",
       "hideEnPrompt": "영어 전송 버전 접기",
-      "needPromptsAfterBreak": "분해 완료 - {n}개 컷에 아직 영상 프롬프트가 없습니다. 필요하면 \"일괄 프롬프트 채우기\"를 누르세요."
+      "needPromptsAfterBreak": "분해 완료 - {n}개 컷에 아직 영상 프롬프트가 없습니다. 필요하면 \"일괄 프롬프트 채우기\"를 누르세요.",
+      "confirmBreakTitle": "컷을 다시 분해할까요?",
+      "confirmBreakMessage": "현재 대본으로 모든 컷을 다시 분해합니다: 기존 {n}개 컷과 영상 프롬프트가 지워지고 다시 생성됩니다(완성된 영상은 영향 없음). 이 작업은 되돌릴 수 없습니다.",
+      "confirmBreakOk": "다시 분해"
     },
     "ref": {
       "title": "참조 소재",

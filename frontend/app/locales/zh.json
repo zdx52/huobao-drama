@@ -736,7 +736,10 @@
       "promptExtraPlaceholder": "补充说明（可留空）：写下你要改的地方，如「多拍手部特写」「旁白放到第 5 秒」「结尾加一个回头」",
       "showEnPrompt": "查看英文发送版",
       "hideEnPrompt": "收起英文发送版",
-      "needPromptsAfterBreak": "拆分完成，有 {n} 个分镜还没有视频提示词，需要时点「批量补齐提示词」"
+      "needPromptsAfterBreak": "拆分完成，有 {n} 个分镜还没有视频提示词，需要时点「批量补齐提示词」",
+      "confirmBreakTitle": "重新拆分分镜？",
+      "confirmBreakMessage": "将按当前剧本重新拆解全部分镜：现有 {n} 个分镜及其视频提示词会被清空重建（已生成的视频成片不受影响）。此操作不可撤销。",
+      "confirmBreakOk": "重新拆分"
     },
     "ref": {
       "title": "参考素材",

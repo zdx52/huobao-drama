@@ -736,7 +736,10 @@
       "promptExtraPlaceholder": "Supplementary notes (optional): write what you want changed, e.g. \"add a close-up of the hands\", \"move the narration to 5s\", \"end with a look back\"",
       "showEnPrompt": "View English send version",
       "hideEnPrompt": "Hide English send version",
-      "needPromptsAfterBreak": "Breakdown complete - {n} storyboard(s) still need video prompts. Click \"Batch Fill Prompts\" when ready."
+      "needPromptsAfterBreak": "Breakdown complete - {n} storyboard(s) still need video prompts. Click \"Batch Fill Prompts\" when ready.",
+      "confirmBreakTitle": "Re-break down storyboards?",
+      "confirmBreakMessage": "All storyboards will be rebuilt from the current script: the existing {n} storyboards and their video prompts will be cleared and regenerated (finished videos are unaffected). This cannot be undone.",
+      "confirmBreakOk": "Re-break down"
     },
     "ref": {
       "title": "Reference Assets",
