@@ -96,6 +96,11 @@ export class MiniMaxVideoAdapter implements VideoProviderAdapter {
       body.refmod_files = record.refmodFiles
     }
 
+    // 角色声音源 wav（2026-10-11）：与图片卡分开传，4080 落盘成 voice_<卡名>.wav(32k) 供官方 ref_audios 用
+    if (Array.isArray(record.voiceWavFiles) && record.voiceWavFiles.length) {
+      body.voice_wav_files = record.voiceWavFiles
+    }
+
     // 图生视频（有首帧）ratio 恒为 adaptive，省略；文生视频 ratio 必填
     if (!firstFrame) {
       const ratio = (record.aspectRatio || '').trim()

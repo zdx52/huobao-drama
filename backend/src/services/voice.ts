@@ -1,18 +1,22 @@
 /**
- * 角色声音（voice 卡）服务 —— 2026-10-08 用户拍板：生产走 RefMod 声音卡
+ * 角色声音（voice）服务 —— 2026-10-11 用户拍板 B：**直出 32k 源 wav，不再抽 refmod 声音卡**
  *
  * 流程：「生成声音」= 底样本(必选) + 音色描述(可选)
- *   → 4080 中转 POST /v2/tts/voice 出 wav（CosyVoice，一次性进程，不常驻）
- *   → 4080 中转 POST /v2/refmod/extract_voice 抽成 refmod_voice-character-<id>_v1 卡
- *   → 卡落 Mac 主副本 <data>/refmods/（与图片卡同构），来源 wav + 参数落 <data>/voices/
- * 生成视频时：声音卡**排在图片卡之后**同序下发（中转识别 voice-* 前缀 → 只贡献 Audio 分量
- *   + 骨架补 <Audio j> is the voice-timbre reference for <Subject K>）。
+ *   → 4080 中转 POST /v2/tts/voice 出 wav（CosyVoice，一次性进程，不常驻；**已在 TTS 源头重采样成 32kHz**）
+ *   → wav 落 Mac 主副本 <data>/voices/<name>.wav，参数落 <same>.json
+ * 生成视频时：这些 wav 以 `voice_wav_files` **单独下发**（不混进图片卡 refmod_files）；
+ *   4080 落盘为 voice_<name>.wav(32k) → 接官方 ref_audios + audio_vae → 提示词补 <Audio j>。
+ *
+ * ⚠️ 背景（为什么卡废了）：旧的 refmod 声音卡（.safetensors）路径经实测**对音色无效**
+ *   （节点包作者 README 亦明写 "Treat voice cloning as not working"）。
+ *   真因是 ①参考音频必须 32kHz（24k 静默失效）②提示词必须显式写 preserve the timbre。
+ *   走官方 ref_audios 后跨性别音色迁移实测成功，故卡这一环整个去掉。
  *
  * 设计取舍（有据）：
  *  - **不新增数据库列**：`initSqliteSchema` 只有 `CREATE TABLE IF NOT EXISTS`，没有加列迁移，
- *    给已有库加列会让查询直接报错 → 声音状态一律用**文件**表达（与卡方案一致，零 schema 风险）。
- *  - **两层缓存**（用户 2026-10-08 拍板 A）：① 内存 in-flight 去重：同名卡在抽 → 复用同一个 Promise；
- *    ② 内容指纹：底样本+描述+文本没变且卡已存在 → 直接返回（不重抽）；force=true 才强制重抽。
+ *    给已有库加列会让查询直接报错 → 声音状态一律用**文件**表达（零 schema 风险）。
+ *  - **两层缓存**（用户 2026-10-08 拍板 A）：① 内存 in-flight 去重：同名在跑 → 复用同一个 Promise；
+ *    ② 内容指纹：底样本+描述+文本没变且 wav 已存在 → 直接返回（不重跑 TTS）；force=true 才强制重出。
  */
 import path from 'path'
 import fs from 'fs'
@@ -95,12 +99,13 @@ export function voiceStatus(id: number): {
   let size = 0
   let base = ''
   let desc = ''
+  // 2026-10-11 起判据是「源 wav 在不在」（不再看 .safetensors 卡——卡已废，见文件头注释）
   try {
-    const st = fs.statSync(refmodCardPath(name))
-    ready = st.isFile() && st.size > 1024
+    const st = fs.statSync(voiceWavPath(name))
+    ready = st.isFile() && st.size > 4096
     size = st.size
   } catch {
-    /* 没有卡 */
+    /* 没有 wav */
   }
   try {
     const m = JSON.parse(fs.readFileSync(voiceMetaPath(name), 'utf8'))
@@ -184,14 +189,14 @@ export async function extractVoiceCard(
     const cleanBase = String(baseId || '').trim()
     if (!cleanBase) throw new Error('缺底样本（base）——先在面板里选一个底')
 
-    // ② 内容指纹：底样本+描述+文本都没变且卡在 → 直接复用，不重抽
+    // ② 内容指纹：底样本+描述+文本都没变且 wav 在 → 直接复用，不重跑 TTS
     if (!force) {
       try {
         const m = JSON.parse(fs.readFileSync(voiceMetaPath(name), 'utf8'))
-        const st = fs.statSync(refmodCardPath(name))
+        const st = fs.statSync(voiceWavPath(name))
         if (
           st.isFile() &&
-          st.size > 1024 &&
+          st.size > 4096 &&
           String(m?.base || '') === cleanBase &&
           String(m?.desc || '') === cleanDesc &&
           String(m?.text || '') === text
@@ -199,7 +204,7 @@ export async function extractVoiceCard(
           return { name, size: st.size }
         }
       } catch {
-        /* 没有记录 → 正常重抽 */
+        /* 没有记录 → 正常重出 */
       }
     }
 
@@ -215,31 +220,10 @@ export async function extractVoiceCard(
       ),
     )
 
-    const resp = await fetch(`${shimUrl}/v2/refmod/extract_voice`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        name,
-        audio: wav.toString('base64'),
-        description: cleanDesc,
-        concept_type: 'voice',
-        force,
-      }),
-      signal: AbortSignal.timeout(900_000),
-    })
-    if (!resp.ok) {
-      throw new Error(`抽声音卡失败 HTTP ${resp.status}: ${(await resp.text()).slice(0, 200)}`)
-    }
-    const out: any = await resp.json()
-    const cardB64 = String(out?.data || '')
-    if (!cardB64) throw new Error('抽声音卡返回为空')
-    const card = Buffer.from(cardB64, 'base64')
-    if (card.length < 1024) throw new Error(`抽声音卡结果异常（只有 ${card.length} 字节）`)
-    const outPath = refmodCardPath(name)
-    fs.mkdirSync(path.dirname(outPath), { recursive: true })
-    fs.writeFileSync(outPath, card)
-    logTaskSuccess('Voice', 'extract', { id, name, size: card.length, wav: wav.length })
-    return { name, size: card.length }
+    // 2026-10-11 用户拍板 B：不再抽 refmod 声音卡（卡对模型无效）。
+    //   TTS 出的 32k wav 就是最终产物，出片时按卡名直接下发 wav。
+    logTaskSuccess('Voice', 'tts', { id, name, size: wav.length, seconds })
+    return { name, size: wav.length }
   })()
   pending.set(name, task)
   try {
@@ -253,8 +237,8 @@ export async function extractVoiceCard(
 }
 
 /**
- * 取这些角色的声音卡（下发给 4080 用）。
- * 缺卡 → **抛错中止**（与图片卡同一纪律：绝不静默降级出一版没带声音卡的片子）。
+ * 取这些角色的**源 wav**（下发给 4080 当官方 ref_audios 参考音频，2026-10-11 起）。
+ * 缺 wav → **抛错中止**（与图片卡同一纪律：绝不静默降级出一版没带声音的片子）。
  */
 export async function voiceCardsForCharacters(
   ids: number[],
@@ -268,13 +252,13 @@ export async function voiceCardsForCharacters(
   const missing: string[] = []
   for (const id of list) {
     const name = voiceCardName(id)
-    // 没有做声音的角色（没有参数记录）→ 跳过，不要求带卡
+    // 没有做声音的角色（没有参数记录）→ 跳过，不要求带声音
     if (!fs.existsSync(voiceMetaPath(name))) continue
     try {
-      const buf = await fs.promises.readFile(refmodCardPath(name))
+      const buf = await fs.promises.readFile(voiceWavPath(name))
       out.push({ name, data: buf.toString('base64') })
     } catch {
-      missing.push(`角色 ${id}（卡名 ${name}）`)
+      missing.push(`角色 ${id}（声音 ${name}）`)
     }
   }
   if (missing.length) {

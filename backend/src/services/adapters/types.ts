@@ -116,6 +116,8 @@ export interface VideoGenerationRecord {
   chainSegments?: number | null
   /** RefMod 卡（2026-10-08）：随请求下发的身份/场景/道具卡，4080 侧落盘后按序填槽 */
   refmodFiles?: Array<{ name: string; data: string }> | null
+  /** 角色声音源 wav（2026-10-11）：单独下发，4080 落盘成 voice_<卡名>.wav(32k) → 官方 ref_audios */
+  voiceWavFiles?: Array<{ name: string; data: string }> | null
   // ... 其他字段
 }
 

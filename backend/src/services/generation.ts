@@ -469,8 +469,8 @@ async function processTask(id: number, config: AIConfig) {
         firstFrameUrl: resolvedFirstFrameUrl,
         lastFrameUrl: resolvedLastFrameUrl,
         referenceImageUrls: resolvedReferenceImageUrls.length ? JSON.stringify(resolvedReferenceImageUrls) : null,
-        refmodFiles:
-          refmodFiles.length || voiceFiles.length ? [...refmodFiles, ...voiceFiles] : null,
+        refmodFiles: refmodFiles.length ? refmodFiles : null,
+        voiceWavFiles: voiceFiles.length ? voiceFiles : null,
         referenceVideoUrls: resolvedReferenceVideoUrls.length ? JSON.stringify(resolvedReferenceVideoUrls) : null,
         referenceAudioUrls: resolvedReferenceAudioUrls.length ? JSON.stringify(resolvedReferenceAudioUrls) : null,
         referenceFileUrl: resolvedReferenceFileUrl,
