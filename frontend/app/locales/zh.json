@@ -688,7 +688,7 @@
       "title": "分镜拆分",
       "segmentStat": "{n} 段落 · {dur}s",
       "rebreak": "重新拆分",
-      "startBreak": "拆分并生成提示词",
+      "startBreak": "拆分分镜",
       "promptProgress": "提示词 {done}/{total}",
       "promptSelected": "生成所选提示词({n})",
       "batchPrompts": "批量补齐提示词",

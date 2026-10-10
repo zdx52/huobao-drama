@@ -688,7 +688,7 @@
       "title": "分镜分解",
       "segmentStat": "{n} セグメント · {dur}s",
       "rebreak": "再分解",
-      "startBreak": "分割してプロンプト生成",
+      "startBreak": "カットに分割",
       "promptProgress": "プロンプト {done}/{total}",
       "promptSelected": "選択分のプロンプト生成({n})",
       "batchPrompts": "一括でプロンプトを補完",

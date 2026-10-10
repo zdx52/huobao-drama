@@ -688,7 +688,7 @@
       "title": "스토리보드 분해",
       "segmentStat": "세그먼트 {n}개 · {dur}초",
       "rebreak": "다시 분해",
-      "startBreak": "분할 및 프롬프트 생성",
+      "startBreak": "샷으로 분할",
       "promptProgress": "프롬프트 {done}/{total}",
       "promptSelected": "선택분 프롬프트 생성({n})",
       "batchPrompts": "일괄 프롬프트 채우기",

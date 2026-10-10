@@ -688,7 +688,7 @@
       "title": "Storyboard Breakdown",
       "segmentStat": "{n} segments · {dur}s",
       "rebreak": "Break Again",
-      "startBreak": "Break down & generate prompts",
+      "startBreak": "Break into shots",
       "promptProgress": "Prompts {done}/{total}",
       "promptSelected": "Generate selected prompts ({n})",
       "batchPrompts": "Batch Fill Prompts",
