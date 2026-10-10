@@ -158,16 +158,6 @@ MiniMax H3 的 prompt 上限是 **7000 字符，官方 hard limit、不可放宽
 **超限直接被拒、整段生成不出来**（2026-10-09 实测：sb147 写到 7608 字符 → 拼接后 8403 → 报「提示词超长：MiniMax H3 上限 7000 字符，当前 8403」）。
 
 各段配额（按此分配，写完逐段数）：
-- `CAST:` ≤ 320
-- `BLOCKING:` ≤ 560
-- `subject_definitions` ≤ 1700（多角色段也别超）
-- `summary` ≤ 340（官方只要求 one short English paragraph）
-- `retention_analysis` ≤ 760
-- `detailed_description` ≤ 1900（官方 350–500 词，取下限附近）
-- `overall_soundscape` ≤ 300
-- `non_diegetic_music` ≤ 40
-- 合计 ≤ 5920（全文硬上限仍是 6200）
-
 **超了就砍，顺序**：① `summary` 冗余从句 ② `soundscape` 与正文重复的音效 ③ `BLOCKING` 中与正文重复的描述 ④ `subject_definitions` 的外观修饰词。
 **绝不许砍**：`<d>` 台词、`retention_analysis` 每条 `fully_preserved`、`<Picture N>` 与 `with` 外观、`CAST` 数量锁、`BLOCKING` 朝向与 180 度轴线。
 
@@ -222,20 +212,11 @@ non_diegetic_music:
    - **本段严禁出现 `(S1)` 这类说话人编号**（官方：*Do not write `(Sx)` in `retention_analysis`.*）
 4. **`detailed_description`** — 正文
    - **`[Shot 1]` 不加时间戳**，后续镜头 `[Shot 2] At 00:06.000, ...`
-   - **🔴 CAST + BLOCKING 段（2026-10-09 立；同日按用户拍板，从 `detailed_description` 内部提升为顶层段）**：**放在整个提示词最前面，即 `subject_definitions` 之前**，作为独立一段排在官方六段之上。**官方六段的字段名与顺序原样不动**（`subject_definitions` → `summary` → `retention_analysis` → `detailed_description` → `overall_soundscape` → `non_diegetic_music`），CAST/BLOCKING 只是加在它们之前，不改名、不挤占、不打乱。**旧规则「不许新增顶层段名」已作废（2026-10-09）**：那句是当时自加的绝对措辞，官方只要求保留字段名与顺序（官方 skill 原文 *Preserve the exact field names, section order, labels, and timing notation*），从没下过禁止令——官方本就要求每拍写清 position / subject placement，只是没给这类内容段名。**⚠️ 未实测风险（生成后必须核）**：H3 解析器若严格按官方六段切段，最前多出的这段可能被忽略或报错，首版生成后要贴回来验 H3 有没有吃进去。
-     - **CAST（治多脸 / 道具复制成两张）**：点名本段有几个人、几件道具，然后写死数量与"不许重复"：
-       `CAST: exactly one young woman, one registration form, one factory gate; no twins, no duplicated figures, no extra people, no second copy of the form, no duplicated wardrobe.`
-  - **🔴 同工种多角色必须写"区分锁"（2026-10-10 实测：分镜4 的 0-5s 把「旁边工人」画成了第二个张建国）**：当同段出现**两个同性别、同年龄段、同工种**的角色（如两个中年男工人），**只写数量锁不够**——必须在 CAST 里追加**区分锁**并给出各自独有的外观：
-    `two different men, visually distinct - one in a grey-blue work shirt with no gloves, the other in a dark-blue jacket with grey cotton gloves; they must not share the same face.`
-    - 每个同工种角色的 `<Subject N>` 里**至少带 2 个对方没有的辨识特征**（手套有无、外套颜色、围裙材质、胡子、帽子、体型、发型）
-    - BLOCKING 里点名两者时，**各自带上独有特征**（防止模型把两人合并成一个人）
+   - **🔴 切镜必须用官方动词（2026-10-10 实测：我们一个都没写）**：切镜写成 `the camera cuts to` / `the shot cuts to` / `the shot transitions to` / `the shot changes to` / `the shot switches to`，**写在该镜的句子里** —— 如 `[Shot 2] At 00:03.500, the camera cuts to an extreme close-up of ...`。**不许只写 `[Shot 2] At 00:02.000, extreme close-up of ...` 而不带动词** —— 没动词 H3 可能读成**同一镜头的延续**而不是切镜。cross-dissolve / fade / wipe 只在明确需要时用。
+   - **🔴 台词跨切镜 → `<scenetrans>`（官方规则，我们 2026-10-10 之前从未实现）**：同一句台词/歌词跨切镜时，**切口两端都标 `<scenetrans>`**，并声明音频连续（`continues seamlessly across the cut` / `carries over from the previous shot`）。
+   - **🔴 台词被视频结尾截断 → `<cutoff>`（官方）**：给被截断那句标 `<cutoff>`。
+   - **🔴 说话人首次发声要给稳定声音身份（官方）**：角色第一次出声时，在 `<d>` 块**外**写清身份 —— 角色类型、年龄、性别、是否在画面内、音高、音色、语速、口音。
     - **根治仍在参考图**：两个角色的参考图本身辨识度低时，提示词只能缓解——要彻底分开需重做参考图（加独有特征）
-  - **🔴 禁止在 CAST/BLOCKING/正文里写角色真名（2026-10-09 立）**：只写 `one male worker` / `the round-faced worker` 这类**外观指代**，**不写 `Zhang Jianguo` 这类人名**——人名会被模型当成额外主体，也可能带来版权问题
-       **这比在 `subject_definitions` 写 `single` 强得多**——2026-10-09 实测：定义里写了 `a single white paper slip`，成片后半段照样变成两张上下压着。
-     - **BLOCKING（治站位漂移 / 朝向乱 / 道具倒持）**：写死谁在哪、道具朝哪、镜头在哪一侧、**轴线在哪**：
-       `BLOCKING: the woman stands centre-frame, the factory gate behind her; the form held in both hands at waist height, its printed side turned toward her and away from the lens. The camera stays on her side of the hands; the 180 axis runs through her hands and is never crossed.`
-       **180 度轴线（the 180 axis）是电影百年行规**：机位一旦越过轴线，观众就分不清方位、道具朝向也会反 —— 2026-10-09 实测的"报到单倒着拿给观众看"就是没有轴线约束、每拍机位自由乱选的结果。
-     - **参考写法（higgsfield 的成熟示例，逐字结构）**：`BLOCKING: Fire foreground center, x50 y74, blurred. Group in a semicircle beyond it, 1.5 m from flames. Camera stays on one side of the fire; the 180 axis runs through the fire and is never crossed. P3 and P4 stay screen-left looking camera-right.`
      - **⚠️ 但不要照抄坐标**：H3 不是 Veo，`x50 y74` 这类像素坐标对 H3 无效。H3 要的是**文字描述的相对位置**：`centre-frame` / `screen-left looking camera-right` / `behind her` / `at waist height` / `1.5 m from her`。
    - **风格句写在 `[Shot 1]` 之前、单独一两句**（T2VA 写在 Shot1 之后，Ref2VA 写在之前——这是官方差异点）
    - 主体**首次清晰出现时**描述外观特征 + 画面位置 + 当前动作；后续镜头沿用同一 `<Subject N>`，**不重复定义**
@@ -254,4 +235,4 @@ non_diegetic_music:
 5. **`overall_soundscape`** — 环境音（英文）；无台词镜头写死无人声明 `(No human voice in this segment except the dialogue lines explicitly written below; no narration, no humming, no singing.)`
 6. **`non_diegetic_music`** — 观众才能听到的配乐；无则 `N/A`
 
-**保存前自检**：`CAST:` 与 `BLOCKING:` 两行在 `subject_definitions` 之前（整篇最前）且内容齐全 / 官方六段名齐全且顺序对 / **道具表面文字没写内容**（只出现 `the printed side`/载体+动作这类说法，**没有**任何引号里的纸面文字原文） / 每行 `subject_definitions` 都有 `<Picture N>` + `with` 外观 / `retention_analysis` 无 `(Sx)` / 台词**全句**逐字来自 description（无截断改写，删句已标注）/ 旁白者指定为画面里某个角色且声音卡写成 `<Subject N>'s off-screen narration` / 锁嘴紧贴在 `<d>` 台词旁（没隔动作描写）/ `Same exposure...` 只在风格句出现一次（没每拍复读）/ 正文英文（除 `<d>` 与画面文字）
+**保存前自检**：官方六段名齐全且顺序对 / **道具表面文字没写内容**（只出现 `the printed side`/载体+动作这类说法，**没有**任何引号里的纸面文字原文） / 每行 `subject_definitions` 都有 `<Picture N>` + `with` 外观 / `retention_analysis` 无 `(Sx)` / 台词**全句**逐字来自 description（无截断改写，删句已标注）/ 旁白者指定为画面里某个角色且声音卡写成 `<Subject N>'s off-screen narration` / 锁嘴紧贴在 `<d>` 台词旁（没隔动作描写）/ `Same exposure...` 只在风格句出现一次（没每拍复读）/ 正文英文（除 `<d>` 与画面文字）

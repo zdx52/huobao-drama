@@ -13,7 +13,7 @@
  *     ③ **只对超标的那一组**下发「压缩这一组」的重写，并容错抽取
  *        （Agent 若又输出全文，后端只取那几段，不判失败）
  *     ④ 八段全部达标才拼起来落库；任一组压不下去才整条记失败
- *  配额之和 = 6120（+ 7 个连接换行 = 6127）≤ 6200 = 全文上限 → 「每组达标 ⇒ 必然不超」。
+ *  配额之和 = 5920（含换行）≤ 6200 = 全文上限 → 「每组达标 ⇒ 必然不超」。
  */
 import fs from 'fs'
 import path from 'path'
@@ -48,8 +48,6 @@ const EN_SECTION_QUOTA: Array<[string, number]> = [
   // 2026-10-10 重新分配：原 CAST 220 + BLOCKING 420 实测压不下来
   // （AI 把 head 组压到 817 仍超 640 —— CAST 的数量锁句 + BLOCKING 的站位/朝向/180 轴线
   //  本身就是硬内容，砍不动）。改为按"实际需要"分配，总量 5920 仍远低于 6200。
-  ['CAST:', 320],
-  ['BLOCKING:', 560],
   ['subject_definitions:', 1700],
   ['summary:', 340],
   ['retention_analysis:', 760],
@@ -61,7 +59,6 @@ const EN_SECTION_QUOTA: Array<[string, number]> = [
 /** 核定/重写分组：相邻段一起处理，limit = 组内配额之和。
  *  八段配额相加 = 6120；全部达标后拼接总长 ≤ 6127 < 6200 = PROMPT_EN_LIMIT。 */
 const EN_STAGES: Array<{ key: string; label: string; segs: string[]; limit: number }> = [
-  { key: 'head', label: 'CAST 和 BLOCKING 两段', limit: 880, segs: ['CAST:', 'BLOCKING:'] },
   { key: 'subj', label: 'subject_definitions 段', limit: 1700, segs: ['subject_definitions:'] },
   { key: 'summ', label: 'summary 和 retention_analysis 两段', limit: 1100, segs: ['summary:', 'retention_analysis:'] },
   {
