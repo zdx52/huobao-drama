@@ -127,7 +127,7 @@ async function generateEnByStages(
       const note = attempt > 0 && problem ? buildSegmentRetryNote(problem, stage, attempt) : ''
       const res = (await agent.generate(
         [{ role: 'user', content: buildStagePrompt(sb, videoLabel, stage, parts) + note }],
-        { maxSteps: 2, requestContext },
+        { maxSteps: 4, requestContext },
       )) as { text?: string } | undefined
       out = cleanSegText(res?.text || '')
       problem = segmentProblem(out, stage)   // 空 / 缺段名 / 超配额 都算不合格
@@ -176,7 +176,7 @@ async function generateZhPrompt(
 **只输出正文**：不要输出解释、前言、结语；不要用代码块围栏；不要调用任何保存工具。`,
       },
     ],
-    { maxSteps: 2, requestContext },
+    { maxSteps: 4, requestContext },
   )) as { text?: string } | undefined
   return cleanSegText(res?.text || '')
 }
