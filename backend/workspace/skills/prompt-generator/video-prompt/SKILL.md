@@ -208,6 +208,12 @@ non_diegetic_music:
        ② **道具的印刷面朝向角色自己，背对镜头**：`the printed side turned toward her, away from the lens`、`the text facing her, the blank back toward the camera`
        ③ **道具要有透视角度，不许平摊正对**：`the form held at an angle in her hands`，禁止 `lying flat` / `lying open` / `flat against her palms`
      - **🔴 道具数量必须显式锁死（防止复制成两张）**：正文里至少写一次 `a single sheet, exactly one form in her hands, never duplicated`；`retention_analysis` 里加 `only one form, never duplicated`。**只在 subject_definitions 写 `single` 不够**——2026-10-09 实测：定义里写了 `a single white paper slip`，成片后半段照样变成两张上下压着（`lying open` 被画成摊开的多张）
+     - **🔴🔴 手部/道具特写拍必须锁「只有一双手」+ 带手臂锚点（2026-10-10 实测新增）**：画面里**只剩手和道具**时，H3 失去「这是谁」的视觉锚点（脸与身体都不在画面里）→ **它会自己补一个人**。实测 sb302：拍 2-5 秒与拍 8-10 秒**两个手部特写都变成 4 只手（两双手）在同一张纸上**，而同段 5-8 秒的**纯背影拍完全正常**（那拍画面里有完整的人当锚点）。**四层都要写，缺一层就漏**：
+       - **`CAST:`** 追加 `exactly one pair of hands in frame — two hands, ten fingers, both attached to the same person`（**只写** `every visible hand belongs to the same woman` **不够**：那只说明"手属于同一人"，没锁"画面里只有一双手"）
+       - **`BLOCKING:`** 追加 `only her two hands ever enter frame; no third hand, no other person`
+       - **每一个手部/道具特写拍**：写成 `extreme close-up of <Subject N>'s two hands` 并追加 `— only her two hands in frame, no third hand`
+       - **必须带手臂锚点（关键）**：同一拍要让**前臂 + 袖口**入画（`forearms and rolled cuffs in frame`），**别只给两只孤零零的手**——有袖子连着前臂，模型才知道这两只手接在同一个身体上
+       - **中文工作版**对应写：「画面里只有 @角色 的一双手（两只手、十根手指、连着同一个人），**且前臂与袖口同时入画**，绝不出现第三只手、第二双手或第二个人」
      - **🔴 不许自己加镜头**：剧本 description 里没写的道具镜头，一个都不许补（2026-10-09 实测：146 镜头1 剧本只有掌心，LLM 自己加了报到单平铺朝镜头）。
      - **反例（全部禁用）**：`the form lying flat and fully visible facing the camera` ❌ / `settles high above them, looking down at the form lying open in her palms` ❌
      - **正例**：`the camera at a low three-quarter angle beside her hands, the printed side of the single form turned toward her and away from the lens, held at an angle, her gaze down on the paper` ✅
