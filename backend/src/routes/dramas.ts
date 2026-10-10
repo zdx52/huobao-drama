@@ -1,10 +1,11 @@
 import { Hono } from 'hono'
-import { and, eq, isNull, like, desc } from 'drizzle-orm'
+import { and, eq, isNull, like, desc, inArray } from 'drizzle-orm'
 import { db, getInsertId, schema } from '../db/index.js'
 import { success, badRequest, notFound, created, now } from '../utils/response.js'
 import { toSnakeCase, toSnakeCaseArray } from '../utils/transform.js'
 import { removeRefmod } from '../services/refmod.js'
 import { removeVoice } from '../services/voice.js'
+import { collectStoryboardFiles, purgeStorageFiles } from '../utils/storage-purge.js'
 
 const app = new Hono()
 
@@ -129,9 +130,14 @@ app.put('/:id', async (c) => {
   return success(c)
 })
 
-// DELETE /dramas/:id - Soft delete
+// DELETE /dramas/:id?purge_files=1
+// 2026-10-10 用户拍板：级联清理（原来只标记剧本身 → 已删剧留下 21 个僵尸资产 + 258 条任务 + 图片视频）
+// purge_files=1 时连同该剧所有集的图片/视频/资产图一起删（不可逆，前端弹窗勾选确认）。
 app.delete('/:id', async (c) => {
   const id = Number(c.req.param('id'))
+  const purge = c.req.query('purge_files') === '1'
+  const ts = now()
+
   // 2026-10-08 删项目连带清卡：先取出该剧全部资产 id，再删对应的 RefMod 卡（Mac 主副本）
   const chars = await db.select({ id: schema.characters.id }).from(schema.characters).where(eq(schema.characters.dramaId, id))
   const scns = await db.select({ id: schema.scenes.id }).from(schema.scenes).where(eq(schema.scenes.dramaId, id))
@@ -142,8 +148,45 @@ app.delete('/:id', async (c) => {
   }
   for (const r of scns) removeRefmod('scene', r.id)
   for (const r of prps) removeRefmod('prop', r.id)
-  await db.update(schema.dramas).set({ deletedAt: now() }).where(eq(schema.dramas.id, id))
-  return success(c)
+
+  // ① 收集该剧的全部存储文件（分镜 + 资产图 + 合并视频 + 任务产物）
+  const eps = await db.select({ id: schema.episodes.id }).from(schema.episodes).where(eq(schema.episodes.dramaId, id))
+  const epIds = eps.map(e => e.id)
+  const files: string[] = []
+  if (epIds.length) {
+    const sbs = await db.select().from(schema.storyboards).where(inArray(schema.storyboards.episodeId, epIds))
+    files.push(...collectStoryboardFiles(sbs as unknown as Array<Record<string, unknown>>))
+  }
+  for (const r of await db.select().from(schema.characters).where(eq(schema.characters.dramaId, id))) if (r.imageUrl) files.push(r.imageUrl)
+  for (const r of await db.select().from(schema.scenes).where(eq(schema.scenes.dramaId, id))) if (r.imageUrl) files.push(r.imageUrl)
+  for (const r of await db.select().from(schema.props).where(eq(schema.props.dramaId, id))) if (r.imageUrl) files.push(r.imageUrl)
+  for (const m of await db.select().from(schema.videoMerges).where(eq(schema.videoMerges.dramaId, id))) {
+    if (m.mergedUrl) files.push(m.mergedUrl)
+    try {
+      const arr = JSON.parse(m.scenes || '[]')
+      if (Array.isArray(arr)) for (const x of arr) if (typeof x === 'string' && x.trim()) files.push(x.trim())
+    } catch { /* 非 JSON 忽略 */ }
+  }
+  for (const t of await db.select().from(schema.sysTask).where(eq(schema.sysTask.dramaId, id))) {
+    if (t.localPath) files.push(t.localPath)
+    if (t.resultUrl) files.push(t.resultUrl)
+  }
+
+  // ② 级联软删：集 / 分镜 / 资产；任务记录物理删（无 deleted_at）
+  await db.update(schema.episodes).set({ deletedAt: ts }).where(eq(schema.episodes.dramaId, id))
+  if (epIds.length) {
+    await db.update(schema.storyboards).set({ deletedAt: ts }).where(inArray(schema.storyboards.episodeId, epIds))
+  }
+  await db.update(schema.characters).set({ deletedAt: ts }).where(eq(schema.characters.dramaId, id))
+  await db.update(schema.scenes).set({ deletedAt: ts }).where(eq(schema.scenes.dramaId, id))
+  await db.update(schema.props).set({ deletedAt: ts }).where(eq(schema.props.dramaId, id))
+  await db.delete(schema.sysTask).where(eq(schema.sysTask.dramaId, id))
+
+  // ③ 可选删文件（不可逆）
+  const removed = purge ? purgeStorageFiles(files) : 0
+
+  await db.update(schema.dramas).set({ deletedAt: ts }).where(eq(schema.dramas.id, id))
+  return success(c, { purged: purge, files_total: files.length, files_removed: removed })
 })
 
 // PUT /dramas/:id/characters - Save characters

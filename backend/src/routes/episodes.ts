@@ -6,6 +6,7 @@ import { toSnakeCaseArray, toSnakeCase } from '../utils/transform.js'
 import { getActiveConfigId } from '../services/ai.js'
 import { EXTRACT_TARGETS, getExtractionStatus, startExtraction, type ExtractTarget } from '../services/extraction.js'
 import { getVideoPromptBatchStatus, startVideoPromptBatch } from '../services/video-prompts.js'
+import { collectStoryboardFiles, purgeStorageFiles } from '../utils/storage-purge.js'
 
 const app = new Hono()
 
@@ -79,14 +80,32 @@ app.put('/:id', async (c) => {
   return success(c)
 })
 
-// DELETE /episodes/:id - Soft delete episode（其分镜/生成记录保留但不可达）
+// DELETE /episodes/:id?purge_files=1
+// 2026-10-10 用户拍板：级联清理。原实现只给「集」打删除标记，分镜 / 关联 / 生成的图片视频
+// 全部留下 → 每次删集都留一堆不可达的孤儿（实测：6 个已删集留下 127 条孤儿分镜 + 1.5G 文件）。
+// purge_files=1 时连同存储文件一起删（不可逆，前端弹窗里由用户勾选确认）。
 app.delete('/:id', async (c) => {
   const id = Number(c.req.param('id'))
+  const purge = c.req.query('purge_files') === '1'
   const [ep] = await db.select().from(schema.episodes).where(eq(schema.episodes.id, id))
   if (!ep) return notFound(c, '剧集不存在')
-  await db.update(schema.episodes).set({ deletedAt: now(), updatedAt: now() })
-    .where(eq(schema.episodes.id, id))
-  return success(c)
+  const ts = now()
+
+  // ① 先收集本集全部分镜引用的存储文件（必须在软删之前读）
+  const sbs = await db.select().from(schema.storyboards).where(eq(schema.storyboards.episodeId, id))
+  const files = collectStoryboardFiles(sbs as unknown as Array<Record<string, unknown>>)
+
+  // ② 级联：分镜软删（保留可回滚）；关联表没有 deleted_at → 物理删
+  await db.update(schema.storyboards).set({ deletedAt: ts }).where(eq(schema.storyboards.episodeId, id))
+  await db.delete(schema.episodeCharacters).where(eq(schema.episodeCharacters.episodeId, id))
+  await db.delete(schema.episodeScenes).where(eq(schema.episodeScenes.episodeId, id))
+  await db.delete(schema.episodeProps).where(eq(schema.episodeProps.episodeId, id))
+
+  // ③ 可选删文件（不可逆）
+  const removed = purge ? purgeStorageFiles(files) : 0
+
+  await db.update(schema.episodes).set({ deletedAt: ts, updatedAt: ts }).where(eq(schema.episodes.id, id))
+  return success(c, { purged: purge, files_total: files.length, files_removed: removed })
 })
 
 // GET /episodes/:id/characters — characters linked to this episode
