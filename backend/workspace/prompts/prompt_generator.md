@@ -97,7 +97,8 @@ non_diegetic_music:
    - **🔴 参考图是"多视角板"时，`<Subject N>` 定义必须点明各视角（2026-10-09 立）**：
      - **判断依据**：**只看该资产的 `final_prompt` / `prompt`（生图定稿）**，里面写明是多视角板（`三联参考板`/`三视图板`/`四格板`/`多格板`/`character sheet`/`multiple views`/`shown from N angles`）。**明确不看 `description`** —— 那是物品外观描述，不许往里放任何排版/布局信息（2026-10-09 踩过：往 description 塞了「左大格/右上小格」，污染外观字段，已回滚）。**没写明就按单视角处理，不许自己猜**。
      - **为什么必须点明**：板里同时出现**正面和背面**时，不点明 = 模型把它们当成**几个不同的东西** → 道具直接复制成两张（2026-10-09 实测根因之一）。
-     - **写法（道具三视图板）**：`<Subject 3> is the registration form shown from three angles in <Picture 3>: a top-down view of its printed front, a three-quarter view of the same sheet, and its blank back — one single sheet seen three ways, not two or three separate forms.`
+     - **🔴 写法（单视角道具图 —— 2026-10-10 起是默认情况）**：`<Subject 3> is the registration form in <Picture 3>, with ...`（**只写"in <Picture N>"，绝不写任何角度描述** —— 图里只有一个视角）。**绝不许写 `shown from three angles` / `three views` / `three ways` 这类词**（图是单张，写了会让模型以为有三张，反而复制道具）。
+     - **写法（多视角板 —— 仅当 `final_prompt` 明写多视角时才用）**：`<Subject 3> is the registration form shown from three angles in <Picture 3>: a top-down view of its printed front, a three-quarter view of the same sheet, and its blank back — one single sheet seen three ways, not two or three separate forms.`
      - **角色四格板可不写四格**（模型天然理解人的正侧背），但**道具、以及任何带正反面的物体必须写**。
      - **`retention_analysis` 同步**：末尾加 `stays identical from every angle shown in <Picture 3>; one single sheet, never duplicated.`
    - **🔴🔴 道具上的文字必须与参考图完全一致（2026-10-10 用户拍板）**：道具表面**只要有文字、表格线、印章**，**必须照参考图原样画出来 —— 不得改写、增删、臆造、变形**。这是**下指令要求"照抄"**，**不是把文字内容写进提示词**（内容仍由参考图 / `props.final_prompt` 管，见上文「画面内文字 ②」）。
@@ -175,4 +176,4 @@ non_diegetic_music:
 
 **编号一致性（硬性）**：`<Subject N>` / `<Picture N>` / `<Audio J>` 与 `(Sx)` 四套编号各自独立计数。`(S1)` 归**旁白者**——旁白者必须是画面里某个角色（一般就是主角自己），**不是独立的陌生人**；`<Audio J>` 绑的是**该角色的旁白音色**，写成 `<Subject N>'s off-screen narration (S1)`。
 
-**收尾自检（保存前逐项核）**：`CAST:` 与 `BLOCKING:` 两行在 `subject_definitions` 之前（整篇最前）且内容齐全 / 官方六段名齐全且顺序对 / **道具表面文字没写内容**（只出现 `the printed side`/载体+动作这类说法，**没有**任何引号里的纸面文字原文；见「画面内文字 ②」） / `subject_definitions` 每行都有 `<Picture N>` 且带 `with` 外观 / `retention_analysis` 无 `(Sx)` / 台词**全句**逐字来自 description（无截断改写，删句已标注）/ 旁白者指定为画面里某个角色且声音卡写成 `<Subject N>'s off-screen narration` / 锁嘴紧贴在 `<d>` 台词旁（没隔动作描写）/ `Same exposure...` 只在风格句出现一次（没每拍复读）/ 正文英文（除 `<d>` 与画面文字） / **中文工作版除编号标记外无任何英文**（搜英文字母） / **中文工作版无 `说（画外` 写法**（一律 `旁白：`） / **道具上的文字写了「必须与参考图完全一致」的照抄指令**（有文字/表格线/印章的道具）
+**收尾自检（保存前逐项核）**：`CAST:` 与 `BLOCKING:` 两行在 `subject_definitions` 之前（整篇最前）且内容齐全 / 官方六段名齐全且顺序对 / **道具表面文字没写内容**（只出现 `the printed side`/载体+动作这类说法，**没有**任何引号里的纸面文字原文；见「画面内文字 ②」） / `subject_definitions` 每行都有 `<Picture N>` 且带 `with` 外观 / `retention_analysis` 无 `(Sx)` / 台词**全句**逐字来自 description（无截断改写，删句已标注）/ 旁白者指定为画面里某个角色且声音卡写成 `<Subject N>'s off-screen narration` / 锁嘴紧贴在 `<d>` 台词旁（没隔动作描写）/ `Same exposure...` 只在风格句出现一次（没每拍复读）/ 正文英文（除 `<d>` 与画面文字） / **中文工作版除编号标记外无任何英文**（搜英文字母） / **中文工作版无 `说（画外` 写法**（一律 `旁白：`） / **道具上的文字写了「必须与参考图完全一致」的照抄指令**（有文字/表格线/印章的道具） / **单视角道具没写角度词**（搜 `three angles`/`three ways`，`final_prompt` 没写明多视角时命中即删）
