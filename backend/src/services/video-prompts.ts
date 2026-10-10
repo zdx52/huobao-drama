@@ -128,16 +128,24 @@ function groupProblem(text: string, stage: { segs: string[]; limit: number }): s
 }
 
 /** 第 1 轮指令：照技能写完整八段（与技能「六段固定、顺序固定」一致，不冲突）。
- *  Agent 不数字符数，所以把逐段配额、总量、以及超限后果都摆出来。 */
+ *  ⚠️ 关键设计：**给"目标长度"而不是只给"上限"** —— 实测 Agent 对"≤6200"无感
+ *  （写成 7746 仍以为没问题），但对"这段约 1500 字符"有明确落点，一次就能写到位。
+ *  目标值取配额的 ~80%，合计约 4900，远低于硬上限，留足余量、也避免回头压缩（压缩要重跑，很慢）。 */
 function buildFullPrompt(sb: { id: number; storyboardNumber: number | null }, videoLabel: string): string {
-  const quota = EN_SECTION_QUOTA.map(([s, q]) => `${s.replace(':', '')} ≤${q}`).join(' / ')
+  const targets = EN_SECTION_QUOTA
+    .map(([s, q]) => `${s.replace(':', '')} 约${Math.round(q * 0.8 / 10) * 10}`)
+    .join(' / ')
   return `请为分镜 #${sb.storyboardNumber}(ID:${sb.id})生成视频提示词 video_prompt_en（H3 官方 Ref2VA 六段式 + 前置 CAST/BLOCKING）。视频模型:${videoLabel}。
 
 请先调用 read_storyboard_context 获取该分镜的画面描述(含【镜头N】子镜头与台词/旁白)、氛围及时长；格式与规则见 video-prompt 技能「英文发送版」节。
 
-🔴 长度硬约束（必守）：全文（含换行与标点）≤ ${PROMPT_EN_LIMIT} 字符。逐段配额：${quota}。
-为什么这么严：MiniMax H3 上限 7000 字符，发送时后端还要拼 591 字符风格头；实测超限会被整段拒收、视频生成不出来（历史事故：写到 7823 → 拼接后 8414 → 报「提示词超长」）。
-**写完逐段数一遍字符数，超的段当场压到配额以内。** 绝不许为了压长度而砍：<d> 台词、retention_analysis 的 fully_preserved、<Picture N> 的 with 外观、CAST 数量锁、BLOCKING 的 180 轴线。
+🔴 长度要求（**一开始就写到位，不要写完再回头压** —— 压缩必须重跑一遍，很浪费）：
+- **目标长度 4800~5600 字符**（完整提示词，含换行与标点）。
+- 逐段目标：${targets}
+- **硬上限 6200 字符**：写入时后端会校验，超了直接拒绝并要求重写。MiniMax H3 上限 7000，发送时还要拼 591 字符风格头。
+- **宁可精炼**：每段只说必要的，形容词能省则省，但必须保住下面这些不许砍的内容。
+
+绝不许为了压长度而砍：<d> 台词、retention_analysis 的 fully_preserved、<Picture N> 的 with 外观、CAST 数量锁、BLOCKING 的 180 轴线。
 
 **直接输出提示词正文**：不要解释、前言、结语；不要用代码块围栏；不要调用任何保存工具（后端负责落库）。`
 }
@@ -190,24 +198,15 @@ async function generateEnByStages(
   requestContext: unknown,
   episodeId: number,
 ): Promise<{ text: string; ok: boolean }> {
-  // ① 整体生成（照技能写完整八段）
-  let full = ''
-  for (let attempt = 0; attempt <= MAX_SEG_RETRY; attempt++) {
-    const note = attempt > 0
-      ? `\n\n⚠️ 上一版全文实测 ${full.length} 字符，超 ${PROMPT_EN_LIMIT} 上限 ${full.length - PROMPT_EN_LIMIT} 字符。请把每段压到配额以内，仍输出完整八段。`
-      : ''
-    const res = (await agent.generate(
-      [{ role: 'user', content: buildFullPrompt(sb, videoLabel) + note }],
-      { maxSteps: 4, requestContext },
-    )) as { text?: string } | undefined
-    full = cleanSegText(res?.text || '')
-    debugLog(episodeId, sb.id, `full-attempt${attempt + 1}`, full, { under: full.length <= PROMPT_EN_LIMIT })
-    if (!full) continue
-    if (full.length <= PROMPT_EN_LIMIT) break
-    logTaskProgress('VideoPrompt', 'full-over-limit', {
-      episodeId, storyboardId: sb.id, attempt: attempt + 1, len: full.length, limit: PROMPT_EN_LIMIT,
-    })
-  }
+  // ① 整体生成**一次**（指令已要求一次写到位）。不做整体重试：
+  //    实测重试产出的长度几乎一样（7823 → 7823 → 7823，纯等待），
+  //    真正有效的压缩是下面「按组局部重写」——代价小得多。
+  const res = (await agent.generate(
+    [{ role: 'user', content: buildFullPrompt(sb, videoLabel) }],
+    { maxSteps: 4, requestContext },
+  )) as { text?: string } | undefined
+  const full = cleanSegText(res?.text || '')
+  debugLog(episodeId, sb.id, 'full', full, { under: full.length <= PROMPT_EN_LIMIT })
   const parts = splitEnSections(full)
   if (!parts.size) {
     logTaskError('VideoPrompt', 'segment-give-up', { episodeId, storyboardId: sb.id, stage: 'full', error: '整体生成无有效段（切不出任何段名）' })
