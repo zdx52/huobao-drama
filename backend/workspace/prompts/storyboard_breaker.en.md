@@ -32,7 +32,8 @@ Duration rules (hard constraints):
 - Pacing tiers: transition segments (traveling/empty shots/transitions) 8-10 seconds; narrative segments 10-15 seconds; payoff segments (close-ups/rule reveals/emotional eruptions/reversals) 12-15 seconds with slower sub-shot pacing
 - **Dialogue budget (hard number, 2026-10-10, aligned with the prompt stage)**: total dialogue + narration characters in the segment (the part written in description) **<= (segment seconds - 4) x 4.5**
   - Why -4: the H3 chain pins the previous segment's tail audio into this segment's head, so **the first 2 s and the last 2 s carry no dialogue** (otherwise the two lines collide and it sounds like garbled speech) - a 10 s segment has only ~6 s of dialogue window
-  - Quick reference: 8 s = **18 chars** (<=16 advised) / 10 s = **27** (<=25) / 12 s = 36 (<=32) / 15 s = 49 (<=45)
+  - **When breaking down, aim at the "recommended" figure - do not run up to the ceiling**: dialogue never fills the whole window (actions, pauses, breathing and ambience need room too), so **<= (segment seconds - 4) x 3.5**
+  - Quick reference (recommended / hard ceiling): 8 s **14 / 18 chars** | 10 s **21 / 27** | 12 s **28 / 36** | 15 s **38 / 49**
   - Measured speed: H3 Chinese narration = **5-6 chars/second** (measured: a 40-char narration ran to 9.9 s and filled the tail)
   - **If it does not fit, split it**: move the excess to the next segment or express it visually - never cram; the "last beat has no dialogue" trick does not count (the earlier line reads straight through the ending)
   - **Self-check**: count every segment; over budget -> split or convert to visuals on the spot
