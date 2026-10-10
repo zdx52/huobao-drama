@@ -45,26 +45,27 @@ const MAX_SEG_RETRY = 3
 
 /** 段名 → 字符配额（顺序即文档顺序） */
 const EN_SECTION_QUOTA: Array<[string, number]> = [
-  // 2026-10-10 重新分配：原 CAST 220 + BLOCKING 420 实测压不下来
-  // （AI 把 head 组压到 817 仍超 640 —— CAST 的数量锁句 + BLOCKING 的站位/朝向/180 轴线
-  //  本身就是硬内容，砍不动）。改为按"实际需要"分配，总量 5920 仍远低于 6200。
+  // 2026-10-10 晚：撤掉自加的 CAST/BLOCKING 顶层段，回到官方 Ref2VA 六段（官方只有这六段）。
+  // 配额按官方口径重配：detailed_description 官方要 350–500 英文词（≈1750–2500 字符），
+  // 原 1900 卡在下限偏少 → 提到 2500；non_diegetic_music 官方要 1–3 句，原 40 写不完 → 120。
+  // 合计 5720（+ 5 个换行 = 5725）≤ 6200 = 全文硬上限。
   ['subject_definitions:', 1700],
   ['summary:', 340],
   ['retention_analysis:', 760],
-  ['detailed_description:', 1900],
+  ['detailed_description:', 2500],
   ['overall_soundscape:', 300],
-  ['non_diegetic_music:', 40],
+  ['non_diegetic_music:', 120],
 ]
 
 /** 核定/重写分组：相邻段一起处理，limit = 组内配额之和。
- *  八段配额相加 = 6120；全部达标后拼接总长 ≤ 6127 < 6200 = PROMPT_EN_LIMIT。 */
+ *  六段配额相加 = 5720；全部达标后拼接总长 ≤ 5725 < 6200 = PROMPT_EN_LIMIT。 */
 const EN_STAGES: Array<{ key: string; label: string; segs: string[]; limit: number }> = [
   { key: 'subj', label: 'subject_definitions 段', limit: 1700, segs: ['subject_definitions:'] },
   { key: 'summ', label: 'summary 和 retention_analysis 两段', limit: 1100, segs: ['summary:', 'retention_analysis:'] },
   {
     key: 'detail',
     label: 'detailed_description、overall_soundscape、non_diegetic_music 三段',
-    limit: 2240,
+    limit: 2920,
     segs: ['detailed_description:', 'overall_soundscape:', 'non_diegetic_music:'],
   },
 ]
