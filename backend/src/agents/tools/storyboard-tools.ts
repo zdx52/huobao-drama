@@ -11,6 +11,33 @@ import { now } from '../../utils/response.js'
 import { logTaskError, logTaskProgress, logTaskSuccess } from '../../utils/task-logger.js'
 import { PROMPT_EN_LIMIT, debugLog } from '../../services/video-prompts.js'
 import { getDramaId, getEpisodeId } from '../context.js'
+import fs from 'node:fs'
+import { voiceCardName, voiceMetaPath } from '../../services/voice.js'
+import { refmodCardPath } from '../../services/refmod.js'
+
+/**
+ * 角色是否已抽好「声音卡」——决定 video_prompt 要不要写 <Audio 1>（2026-10-10 修）
+ *
+ * 事故背景：声音卡在生成时其实一直有下发（generation.ts 按 referenceAssetKeys 里的角色
+ * 调 voiceCardsForCharacters），但喂给提示词 Agent 的上下文里**完全没有这个信息** →
+ * Agent 永远写不出规则要求的 <Audio 1> 那行，还会在 overall_soundscape 里写死
+ * "No human voice anywhere"。H3 于是拿到「这段没人声」+ 一个音色参考音频，
+ * 没有台词可念，就把参考音频当素材自己发挥——听感就是「把参考音频念出来了」。
+ * 全库 11 个英文提示词里 <Audio> 命中 0 次，即此因。
+ */
+function readVoiceCardInfo(id: number): { has_voice_card: boolean; voice_desc: string } {
+  try {
+    const name = voiceCardName(id)
+    if (!fs.existsSync(refmodCardPath(name))) return { has_voice_card: false, voice_desc: '' }
+    let desc = ''
+    try {
+      desc = String(JSON.parse(fs.readFileSync(voiceMetaPath(name), 'utf8'))?.desc || '')
+    } catch { /* 元数据缺失不影响判定 */ }
+    return { has_voice_card: true, voice_desc: desc }
+  } catch {
+    return { has_voice_card: false, voice_desc: '' }
+  }
+}
 
 async function syncStoryboardCharacters(storyboardId: number, characterIds: number[]) {
   await db.delete(schema.storyboardCharacters)
@@ -151,6 +178,8 @@ const readStoryboardContext = createTool({
         styling: c.styling || '',
         image_url: c.imageUrl || '',
         reference_images: c.referenceImages || '',
+        // 🔴 有声音卡的角色 → video_prompt 必须写 <Audio 1> 绑定它（规则见 prompt_generator.md）
+        ...readVoiceCardInfo(c.id),
       }))
 
     const scenes = scns

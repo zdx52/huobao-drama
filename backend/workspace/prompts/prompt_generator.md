@@ -112,6 +112,9 @@ non_diegetic_music:
      - **反例（全部禁用）**：`the form lying flat and fully visible facing the camera` ❌ / `settles high above them, looking down at the form lying open in her palms` ❌
      - **正例**：`the camera at a low three-quarter angle beside her hands, the printed side of the single form turned toward her and away from the lens, held at an angle, her gaze down on the paper` ✅
    - **鞋写 `cloth shoes`（布鞋），禁写 `liberation shoes`**——直译词会被模型渲染成奇怪的靴子
+   - **🔴 声音卡判定（2026-10-10 修）**：`read_storyboard_context` 返回的每个角色都带 `has_voice_card` 与 `voice_desc` 两个字段。**凡本段出场且 `has_voice_card: true` 的角色，必须写 `<Audio 1>` 行**（写法见下）；`has_voice_card: false` 的角色不写。**绝不许**在 `overall_soundscape` 里写 `No human voice...` 的同时**不写** `<Audio>` —— 这个组合会让 H3 把参考音频当素材自己发挥，听感就是「把参考音频念出来了」（2026-10-10 实测事故：全库 11 个英文提示词 `<Audio>` 命中 0 次，皆因此）
+   - **🔴 中英台词必须一致（2026-10-10 修）**：`video_prompt`（中文）与 `video_prompt_en`（英文）是同一件事的两个版本。**中文版有几条 `<d>`，英文版就必须有几条、内容逐字一致**。**禁止**只写中文版而英文版丢台词（2026-10-10 实测：中文版有画外音、英文版 0 条 `<d>`，H3 用英文版 → 声音全乱）
+   - **🔴 台词只能来自 description（2026-10-10 强化）**：`description` 里没有台词的拍**就是没有台词**，写「本段无任何人声」，**绝不许自己编一句**。剧本里明显有内心独白而 description 没写 → 那是分镜拆解阶段漏了，**不要在这里补**（补了中文版却没补英文版，正是本次声音事故的成因）
    - **有声音卡时**追加一行 `<Audio 1>`。**声音卡是音色参考；画外音没有单独的参考音源，所以旁白必须指定画面里某个角色当旁白者**（一般就是主角自己）：
      - 本段**有旁白/画外音** → `<Audio 1> is the voice-timbre reference for <Subject N>'s off-screen narration (S1); use it only as a timbre reference and do not reproduce its words.`
        （绑的是**该角色的旁白音色**，不是"画面里正在说话的嘴"）
