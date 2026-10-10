@@ -1,53 +1,48 @@
 ---
 name: prop-prompt
-description: Final prop prompt specification — THREE-VIEW SHEET (left = primary view / top-right = 3/4 side / bottom-right = back), white-background item: accurate proportions, complete edges, background carries no narrative
+description: Final prop prompt specification — SINGLE PRODUCT SHOT (primary view, text filling the frame and clearly legible), white-background item: accurate proportions, complete edges, background carries no narrative
 ---
 
-# Final Prop Prompt (three-view sheet · white-background item)
+# Final Prop Prompt (single product shot · white-background item)
 
-What is generated is a **three-view reference sheet** (a horizontal three-panel layout showing the same prop from three angles) — **not a single product shot**:
+What is generated is a **single-view product shot** — **not a three-view sheet, not a multi-angle collage**:
 
-| Panel | Position | Content | What it fixes |
-|---|---|---|---|
-| **① Primary view** | left large panel (~55% width) | flat props (paper, documents, photos) = **top-down flat lay**; 3D props = **slightly high-angle 3/4 front** | the only high-resolution source of **text and proportions** |
-| **② Side view** | top-right panel | the same prop at a **3/4 angle** with near-large/far-small perspective | **geometric consistency** — the card must have seen what "tilted" looks like; **panel ② still shows only the prop, no hand** |
-| **③ Third angle** | bottom-right panel | **flat props** (paper/documents/photos) = **blank paper back**; **cylindrical / elongated props** (cigarette/pen/bottle/knife) = **view from the other end** (turn it around so the end invisible from the front is in frame; both ends must be legible); **bulky 3D props** (cup/tool) = **back or underside view** | prevents the see-through artifact (front text showing through the back) AND the "cylinder treated as a flat sheet with front/back" error that loses one end |
+| Item | Content | What it fixes |
+|---|---|---|
+| **Viewpoint** | **flat props** (paper, documents, photos) = **top-down flat lay, filling the frame**; **3D props** = **slightly high-angle 3/4 front** | the only high-resolution source of **text and proportions**; the text fills the frame |
+| **Background** | pure white backing, no sense of place, no plot hints, no decoration | background carries no narrative |
+| **Subject** | **only this one prop in frame** | prevents contamination |
 
-**Why it must be three panels**: a single white top-down shot **conflicts geometrically** with how the prop is used in the video (top-down flat vs tilted in hand, white backdrop vs scene light, filling the whole canvas vs a small object in a scene), so the model has to *redraw* it to fit the scene → **text and size both drift** (measured 2026-10-09: the registration form's text and paper size did not match the reference). A three-view sheet lets the RefMod card and the reference image see all three angles, so the model does not need to redraw.
+## 🔴🔴 Why it changed to a single shot (user decision 2026-10-10, measured root cause)
 
-Three hard requirements (apply to all three panels):
+**The old version was a three-view sheet** (a horizontal three-panel layout: front / 3/4 side / back, combined in one image). **It failed in practice** (sb302, the registration form):
+
+- **The prop's text did not match the reference image**; yet **in the same storyboard, the slogan text on the scene reference image was always accurate** — **the difference is: the scene image is a single view, the prop image was a three-panel sheet**.
+- **The three-panel sheet turns "one prop" into "three different things"** → the model **cannot tell which panel is the canonical view** (it very likely took the back panel as the reference), which is why the front came out wrong while the back looked "about right".
+- **Each panel occupies only about 1/3 of the image's pixels** → the text is blurrier and even less accurate.
+- **User's requirement**: text on props **must be accurate when it appears on screen**; **at all other times only the shape and size need to be correct** → **single view + text filling the frame** is the precondition for "accurate text".
+- **Cost**: shots that turn the prop to its back have no reference (acceptable under the user's requirement — the back carries no text anyway).
+
+Four hard requirements:
 1. **Accurate proportions of all parts of the item** — no exaggeration, distortion, or stylized stretching; the prop's relative size relationships must be true
 2. **Complete edges** — the prop is fully in frame as a whole, with margins on all sides; no part may be cropped by the frame edge
 3. **The background carries no narrative content** — the pure white background is only a backing, with no sense of place, no plot hints, no decorative elements
-4. **Every panel shows this one prop and nothing else** — apart from the pure white background and the prop's own faint shadow, **nothing else may appear**: people, **hands (any form of holding / fingers / palm / arm)**, other objects, packaging, bases, display stands, scene environment. **Applies to all three panels; panel ② (side view) must not show a hand either** — the reference only supplies an angle sample of "what this prop looks like tilted"; **the held state is generated by the video itself and is never supplied by the reference**
+4. **Only this one prop appears in frame** — apart from the pure white background and the prop's own faint shadow, **nothing else may appear**: people, **hands (any form of holding / fingers / palm / arm)**, other objects, packaging, bases, display stands, scene environment. **The held state is generated by the video itself and is never supplied by the reference**
 
 ## Output Structure (assemble in this order, following the session language directive)
 
 ```
-Three-view reference sheet, horizontal layout, pure white background, three panels
-separated by clean 6-pixel white rules, no borders, no labels, no arrows, no numbers,
-no extra text anywhere in the frame:
-【left large panel, about 55% of the width】single-item product shot, standard
-product-photography viewpoint, [panel ① view: flat props → "top-down flat lay,
-filling this panel"; 3D props → "slightly high-angle 3/4 front"],
+Single-item product shot, pure white background, no borders, no labels, no arrows,
+no numbers, no extra text anywhere in the frame:
+[viewpoint: flat props → "top-down flat lay, filling the frame";
+ 3D props → "slightly high-angle 3/4 front"],
 [prop name + material/color/shape/size + degree of wear and damage details],
-[text if any: spelled out verbatim in this panel per the In-frame Text rule],
+[text if any: spelled out verbatim per the In-frame Text rule],
 accurate proportions of all parts, isolated on a pure white background,
 centered and fully in frame, edges complete with no cropping;
-【top-right panel】the same prop at a 3/4 angle, [perspective and dimensionality],
-same material, same color, same wear, same proportions, pure white background,
-edges complete with no cropping;
-【bottom-right panel】[flat props: the pure white blank paper back of the same prop,
-the paper is opaque and shows none of the front's text, table lines or seal;
-cylindrical / elongated props: the same prop seen from the other end, [name that end —
-e.g. "the cut end showing tobacco strands", "the pen tip", "the bottle base"],
-both ends legible and consistent with this panel;
-bulky 3D props: the back or underside view of the same prop], pure white background,
-edges complete with no cropping;
-all three panels must be the same item: identical size and proportions, material,
-color and wear — only the shooting angle differs.
-background clean and carrying no narrative content, no other objects, no people,
-no scene, no hands holding it, soft even studio light, faint shadows, high detail
+the text, table lines and seal on the prop fill the frame, sharp and crisp,
+with every stroke legible (this is the image's number-one goal);
+soft even studio light, faint shadows, high detail
 ```
 
 ## In-frame Text (Hard Rule)
@@ -57,29 +52,28 @@ no scene, no hands holding it, soft even studio light, faint shadows, high detai
 - **Has text**: put the exact text in quotes and state where it sits (e.g. `the front of the pack reads "Yunnan Baiyao"`, `the cover reads "Spring and Autumn" in vertical type`)
   - **Keep it short**: ≤6 Chinese characters, or ≤2 words in English/digits
   - Copy the text **verbatim** from the prop asset's `name`/`description` — **never rewrite, never invent**; if `description` omits it but the prop must bear text (e.g. a book title), give the shortest form consistent with the story
-  - When the prop bears text (titles, seals, signatures, engravings), `description` must fix the surface text verbatim per the story, and the video_prompt must carry it over unchanged
 - **No text**: state explicitly "there is no text on the prop's surface" — **never leave it blank for the model to improvise**
 - **Forbidden**: phrasings such as "some text on the surface" / "Chinese characters on the packaging"
 - **Paper / certificate type props (forms, ID cards, letters, newspapers, book pages, photos) have three more hard rules**:
   - **Compose the full content**: title (large) + 2–4 body lines + signature (name/date) + seal (the text inside the stamp), **each a separate group, spelled out verbatim**. Example: `the sheet reads "报到证" in large vertical type; below it three body lines reading "林巧", "红星机械厂", "二车间钳工"; signed "三月十七日" at the lower right; a red round seal containing "红星机械厂"` — a sheet of paper is large; a lone title looks bare and invites the model to leave it blank
+  - **🔴 Text must fill the frame (added 2026-10-10, so the video side can copy it accurately)**: paper-type props are laid **top-down and flat, with the sheet filling the entire frame**, and the type must be large enough for every stroke to be clearly legible — during video generation H3 learns "what the text looks like" from this image, and text that is too small will always come out wrong
   - **The back must be a blank sheet**: state verbatim "the paper is opaque; the back is blank and shows no bleed-through of the front's text, table lines or seal" — omitting it produces the see-through artifact (measured: the registration form's content was visible from the back)
   - Never write "the paper is thin / translucent / shows through"
 
 ## Generation Rules
 
-- Build around the prop's `name` and `description` (physical appearance): material, color, shape, size, degree of wear, signs of damage, and other physical details must be **carried through item by item** — they are the source of the prop's recognizability. **These physical details must be identical across all three panels**
-- **Per-panel viewpoint**: panel ① uses a top-down flat lay for flat props (clearest text) and a slightly high-angle 3/4 front for 3D props; panel ② is always a 3/4 side view with perspective; panel ③ **splits by prop shape** (flat = blank paper back; cylindrical / elongated = seen from the other end; bulky 3D = back or underside view). **Panel ② must never be dropped** — in the video the prop sits in a held/tilted *state of use*, so the card must have an angle sample to lock; **but panel ② likewise shows only the prop itself, suspended alone on the pure white background — never a hand, never a person, never any holding pose** (the holding is produced by the video; the reference only supplies the angle)
-- **Cylindrical / elongated props must never be described as "back", "paper back" or "the reverse side"**: a cylinder has no front/back, and the model reads those words as "flip a sheet of paper over" and **loses one end** (measured 2026-10-10: the cigarette's panel ③ came out with no filter tip). **Rewrite as "seen from the other end" and name that end** (tobacco end / pen tip / bottle base / knife spine), and state that **both ends must be legible**
-- Inside each panel the item is centered and complete, with margins on all sides, accurate proportions, complete edges — do not crop the prop's body
-- The three panels are separated by 6-pixel pure white rules; **the sheet must carry no labels, panel names, arrows, or numbers** (the model renders them as on-screen text)
-- Soft even studio light, faint shadows, high detail; identical lighting in all three panels
+- Build around the prop's `name` and `description` (physical appearance): material, color, shape, size, degree of wear, signs of damage, and other physical details must be **carried through item by item** — they are the source of the prop's recognizability
+- **Within the single frame** the item is centered and complete, with margins on all sides, accurate proportions, complete edges — do not crop the prop's body
+- **Text / patterns fill the frame, sharp and crisp**: this is the primary reason the prop image exists (the video side copies from it)
+- Soft even studio light, faint shadows, high detail
 - Describe only the item itself; do not mention plot, characters, or usage (neither the background nor the frame carries narrative content)
 - Do not mix unrelated words into the output; **do not** use "cinematic quality"-type words (a prop image is a product shot, not a film still)
 
 ## Prohibitions
 
-- **Hands holding it (fingers, palm, arm, any holding pose), people** — applies to all three panels, **especially panel ② (side view)**
+- **Hands holding it (fingers, palm, arm, any holding pose), people**
 - Other objects, packaging, bases, display stands (unless they are part of the prop itself), scene environment in frame
+- **Multi-angle collage / three-view sheet / panels** (explicitly forbidden since 2026-10-10 — it makes the model unable to tell which is the canonical view)
 - Watermarks, signatures (text printed on the prop itself must be spelled out **verbatim** per the "In-frame Text" rule above, and may be kept and described)
 - Environmental reflections, colored light
 - Exaggerated perspective, distortion, proportion errors, edge cropping
