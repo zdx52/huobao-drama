@@ -184,6 +184,7 @@ non_diegetic_music:
    - Official example: `<Subject 1> is the young woman in <Picture 1>, with long dark hair, a blue cardigan, and a thin silver necklace.`
    - **🔴 `<Picture N>` comes from the `reference_order` table returned by `read_storyboard_context`, copied row by row (established 2026-10-10 after a measured incident)**: this pipeline's reference order is fixed as **scene = image 1 → characters (id ascending) → props last** (same index as `@图片N` and the slot `mod_N`).
   - **How**: **read that storyboard's `reference_order` first**; each row's `picture` is the index, `name` is the asset — copy it **row by row**
+  - **If there is no `reference_order`, compute it with this rule**: **scene (1 image) → characters (by ascending id in `character_ids`) → props (ascending id)**; **ascending id** — not binding order, not appearance order
   - **Never number by "whoever appears or speaks first"** — measured 2026-10-10: in sb148's 0-5s the male worker appears first, the LLM wrote him as `<Picture 2>` (actually Lin Qiao) and Lin Qiao as `<Picture 3>` (actually the male worker) — **the two reference images were fully swapped** → two copies of the male worker, identities scrambled
   - A shifted index also binds `<Subject N>` to the wrong `mod_N` card (the scene card becomes the identity card = the face drifts)
    - **The scene also needs its own `<Subject N>`**: `<Subject 1> is the scene in <Picture 1>, with ...`. Omitting the scene means it takes neither card nor reference image

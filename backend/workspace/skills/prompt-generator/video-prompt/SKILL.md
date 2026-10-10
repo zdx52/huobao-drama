@@ -186,6 +186,7 @@ non_diegetic_music:
    - 官方示例原文：`<Subject 1> is the young woman in <Picture 1>, with long dark hair, a blue cardigan, and a thin silver necklace.`
    - **🔴 `<Picture N>` 编号 = `read_storyboard_context` 返回的 `reference_order` 表，逐条照抄（2026-10-10 立，实测事故）**：本管线参考图顺序固定为 **场景第 1 张 → 角色（id 升序）→ 道具最后**（与 `@图片N` 注入顺序、卡槽 `mod_N` 三者同号）。
   - **写法**：**先读该分镜的 `reference_order`**，表里每行的 `picture` 就是编号、`name` 就是对应资产 —— **逐条照抄**
+  - **万一没有 `reference_order`，按这个规则自己算**：**场景（1 张）→ 角色（按 `character_ids` 的 id 从小到大）→ 道具（按 id 从小到大）**；是 **id 升序**，不是绑定先后、更不是出场先后
   - **不许按"谁先出场/谁先说话"排编号**——2026-10-10 实测：sb148 的 0-5s 张建国先出场，LLM 把他写成 `<Picture 2>`（实际林巧）、林巧写成 `<Picture 3>`（实际张建国），**两个角色的参考图完全对调** → 成片两个张建国、身份全乱
   - 编号错位还会让 `<Subject N>` 对上错误的 `mod_N` 卡（场景卡被当成身份卡 = 脸必漂）
    - **场景也必须有 `<Subject N>`**：`<Subject 1> is the scene in <Picture 1>, with ...`。漏掉场景 = 场景不吃卡、不吃参考图
