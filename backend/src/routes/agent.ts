@@ -65,10 +65,23 @@ app.post('/:type/chat', async (c) => {
 
   const startTime = performance.now()
 
+  // 2026-10-10：maxSteps 按 Agent 类型区分。
+  // 原先统一写 6 是为了治「单条生成提示词」的死循环（AI 写超长被写入闸门拒掉后
+  // 一路重写、10 分钟不返回），但这里是**所有 Agent 的通用路由**——拆分 Agent
+  // （storyboard_breaker）要「1 次 read_storyboard_context + N 批 save_storyboards」
+  // （每批 ≤8 个分镜，28 个分镜 = 4 批）＝ 5 步以上，被统一砍到 6 步后跑不完、
+  // 静默失败：用户报「我执行重新拆分了，但库里一条都没变」。
+  const AGENT_MAX_STEPS: Record<string, number> = {
+    storyboard_breaker: 30, // 拆分：读上下文 + 多批保存（每批 ≤8 个分镜）
+    script_rewriter: 10, // 剧本改写：读 + 分段写回
+    prompt_generator: 6, // 单条提示词：读上下文 + 1 次回答，超长被拒后不该无限重写
+  }
+  const maxSteps = AGENT_MAX_STEPS[agentType] ?? 20
+
   try {
     const result = await agent.generate(
       [{ role: 'user', content: message }],
-      { maxSteps: 6, requestContext },
+      { maxSteps, requestContext },
     )
 
     const elapsed = ((performance.now() - startTime) / 1000).toFixed(1)
