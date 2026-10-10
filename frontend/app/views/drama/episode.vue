@@ -2940,32 +2940,25 @@ async function onBreakdownDone() {
 async function genVideoPrompt(sb) {
   if (!sb || videoPromptGeneratingIds.value.includes(sb.id)) return
   const idx = sbs.value.indexOf(sb) + 1
-  const cfg = selectedVideoConfig.value
-  const label = cfg ? `${cfg.name} (${cfg.provider})` : '默认'
-  const charNames = getStoryboardCharacters(sb).map(c => c.name).join('、') || '无'
-  const propNames = getStoryboardProps(sb).map(p => p.name).join('、') || '无'
-  const extra = (videoPromptExtra.value || '').trim()
-  const extraBlock = extra
-    ? `\n\n【补充说明 — 必须在生成时逐条满足】\n${extra}\n（若该分镜已有 video_prompt / video_prompt_en，read_storyboard_context 会返回现值，请在其基础上按补充说明改写，不要把补充说明当新剧情编造。）`
-    : ''
   videoPromptGeneratingIds.value.push(sb.id)
   try {
-    await api.post(`/agent/prompt_generator/chat`, {
-      message: `请为分镜 #${idx}(ID:${sb.id})生成视频提示词。视频模型:${label},请根据该模型的特性和时长限制生成。${extraBlock}
-
-该分镜信息:时长 ${sb.duration || 10}s;场景:${getSceneName(sb) || '未绑定'};角色:${charNames};道具:${propNames}。
-
-请先调用 read_storyboard_context 获取该分镜的画面描述(含【镜头N】子镜头与台词/旁白)、氛围及时长，据此**同批生成两份**：
-1. video_prompt = 中文工作版（按 video-prompt 技能的既有规则：按 3 秒分段换行、用 @角色名/@场景名/@道具名 引用参考素材、段落内允许多镜头切镜但不跨场景、切镜点对齐 description 的【镜头N】结构）
-2. video_prompt_en = H3 官方 Ref2VA 六段式英文版（严格按 video-prompt 技能「英文发送版」节）
-然后调用 update_storyboard 保存，**必须同时传三个键: storyboard_id、video_prompt、video_prompt_en**。不要改动其他字段,不要重新拆分整集。`,
-      drama_id: dramaId,
-      episode_id: epId.value,
-      model: chatModelOverride() || undefined,
-      config_id: chatConfigId() || undefined,
-    })
-    toast.success(t('episode.sb.promptGenerated', { n: idx }))
-    await refresh()
+    // 2026-10-10 改走批量接口（只传这一条）：复用后端的长度治理。
+    // 原来走 /agent/prompt_generator/chat（裸 Agent，maxSteps 20）——AI 写超长被
+    // 写入闸门拒掉后会一路重写到步数用尽（实测等了 10 分钟，库里一个字没改，最后
+    // 发视频还是报「提示词超长 8337」）。批量接口由后端控制：整体生成 1 次 + 只重写
+    // 超标的那一组（每组最多 2 次），并落诊断日志。
+    const extra = (videoPromptExtra.value || '').trim()
+    const res = await episodeAPI.generateVideoPrompts(epId.value, chatModelOverride(), chatConfigId(), [sb.id], extra || undefined)
+    if (!res?.total) {
+      if (res?.already_running) {
+        videoPromptBatch.value = { running: true, total: 0, completed: 0 }
+        pollVideoPromptBatch()
+      } else toast.info(t('episode.sb.allHavePrompts'))
+      return
+    }
+    videoPromptBatch.value = { running: true, total: res.total, completed: 0 }
+    toast.info(t('episode.sb.batchStarted', { n: res.total }))
+    pollVideoPromptBatch()
   } catch (e) {
     toastError(e)
   } finally {

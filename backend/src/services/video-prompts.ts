@@ -131,7 +131,7 @@ function groupProblem(text: string, stage: { segs: string[]; limit: number }): s
  *  ⚠️ 关键设计：**给"目标长度"而不是只给"上限"** —— 实测 Agent 对"≤6200"无感
  *  （写成 7746 仍以为没问题），但对"这段约 1500 字符"有明确落点，一次就能写到位。
  *  目标值取配额的 ~80%，合计约 4900，远低于硬上限，留足余量、也避免回头压缩（压缩要重跑，很慢）。 */
-function buildFullPrompt(sb: { id: number; storyboardNumber: number | null }, videoLabel: string): string {
+function buildFullPrompt(sb: { id: number; storyboardNumber: number | null }, videoLabel: string, extra?: string): string {
   const targets = EN_SECTION_QUOTA
     .map(([s, q]) => `${s.replace(':', '')} 约${Math.round(q * 0.8 / 10) * 10}`)
     .join(' / ')
@@ -147,16 +147,21 @@ function buildFullPrompt(sb: { id: number; storyboardNumber: number | null }, vi
 
 绝不许为了压长度而砍：<d> 台词、retention_analysis 的 fully_preserved、<Picture N> 的 with 外观、CAST 数量锁、BLOCKING 的 180 轴线。
 
+${extra ? `\n\n【补充说明 — 必须在生成时逐条满足】\n${extra}\n（若该分镜已有 video_prompt_en，read_storyboard_context 会返回现值，请在其基础上按补充说明改写，不要把补充说明当新剧情编造。）` : ''}
+
 **直接输出提示词正文**：不要解释、前言、结语；不要用代码块围栏；不要调用任何保存工具（后端负责落库）。`
 }
 
-/** 单组重写指令：只压这一组，其他组已定稿 */
+/** 单组重写指令：只压这一组，其他组已定稿。
+ *  ⚠️ 关键是**告诉它怎么砍**：早先只写"绝不许砍 XXX"，Agent 什么都不敢删 →
+ *  反复重写仍是 7746（实测 sb147 卡了 10 分钟一个字没改进去）。 */
 function buildRewritePrompt(
   sb: { id: number; storyboardNumber: number | null },
   stage: { label: string; segs: string[]; limit: number },
   current: string,
   problem: string,
   attempt: number,
+  extra?: string,
 ): string {
   const segQuota = stage.segs
     .map(s => `${s.replace(':', '')} ≤${(EN_SECTION_QUOTA.find(([k]) => k === s) || ['', 0])[1]}`)
@@ -165,18 +170,31 @@ function buildRewritePrompt(
 
 问题：${stage.label} 这一组，${problem}。
 
-要求：
-1. **只压缩【${stage.label}】**，把它压到 ≤ ${stage.limit} 字符（含换行与标点）；组内逐段配额：${segQuota}。
-2. **输出这一组的实际内容（保留段名行）**，其他组不需要输出。
-3. 不许为了压长度而砍：<d> 台词、retention_analysis 的 fully_preserved、<Picture N> 的 with 外观、CAST 数量锁、BLOCKING 的 180 轴线。
-4. 不要解释、前言、结语；不要用代码块围栏；不要调用任何保存工具。
+**怎么压（照做，这些都是安全的）**：
+1. 删修饰性形容词与程度词：\`wind-and-oil weathered wheat-toned skin\` → \`weathered skin\`；\`slightly\` / \`very\` / \`gently\` / \`faintly\` 一律删
+2. 同一件事只说一遍：BLOCKING 里写过的站位与朝向，detailed_description 里不再重复
+3. \`subject_definitions\` 每个主体只留 5~6 个辨识特征（脸型 / 发型 / 服装主色 / 关键道具），其余删
+4. \`retention_analysis\` 每条压成一句话：\`<Subject N> (appears in ...): fully_preserved - <一句>\`，不要重述外观细节
+5. 镜头描述去掉氛围补充：\`soft modelling\`、\`light level unchanged\`、\`consistent exposure\` 这类删掉
+6. \`overall_soundscape\` 只留 3~5 个主要音效，其余删
+7. 删掉所有重复的 "stays identical to the reference" 类尾句，保留一次即可
+
+**必须保留（砍了会穿帮）**：
+- <d>…</d> 里的台词原文（一个字都不能改）
+- 每个 Subject 的 fully_preserved 字样（retention 状态不能降级）
+- <Picture N> 编号（参考图绑定）
+- CAST 里的数量锁（exactly one / no duplicates 那几句）
+- BLOCKING 里的 180 轴线句
+- 主体编号与名称的对应关系
+
+${extra ? `\n**压缩时仍必须继续满足补充说明**：${extra}\n` : ''}输出要求：**只压缩【${stage.label}】**并压到 ≤ ${stage.limit} 字符（组内逐段：${segQuota}）；输出这一组内容（保留段名行）；其他组不用输出；不要解释、前言、结语；不要代码块围栏；不要调用任何保存工具。
 
 【待压缩的原文】
 ${current}`
 }
 
 /** 诊断日志：把每轮 Agent 的原始输出记到 data/debug/video-prompt.log，便于事后复盘 */
-function debugLog(episodeId: number, sbId: number, tag: string, text: string, extra?: Record<string, unknown>) {
+export function debugLog(episodeId: number, sbId: number, tag: string, text: string, extra?: Record<string, unknown>) {
   try {
     const dir = path.join(STORAGE_ROOT, 'debug')
     fs.mkdirSync(dir, { recursive: true })
@@ -197,12 +215,13 @@ async function generateEnByStages(
   videoLabel: string,
   requestContext: unknown,
   episodeId: number,
+  extra?: string,
 ): Promise<{ text: string; ok: boolean }> {
   // ① 整体生成**一次**（指令已要求一次写到位）。不做整体重试：
   //    实测重试产出的长度几乎一样（7823 → 7823 → 7823，纯等待），
   //    真正有效的压缩是下面「按组局部重写」——代价小得多。
   const res = (await agent.generate(
-    [{ role: 'user', content: buildFullPrompt(sb, videoLabel) }],
+    [{ role: 'user', content: buildFullPrompt(sb, videoLabel, extra) }],
     { maxSteps: 4, requestContext },
   )) as { text?: string } | undefined
   const full = cleanSegText(res?.text || '')
@@ -222,7 +241,7 @@ async function generateEnByStages(
         episodeId, storyboardId: sb.id, stage: stage.key, attempt: attempt + 1, problem, len: cur.length, limit: stage.limit,
       })
       const res = (await agent.generate(
-        [{ role: 'user', content: buildRewritePrompt(sb, stage, cur, problem, attempt + 1) }],
+        [{ role: 'user', content: buildRewritePrompt(sb, stage, cur, problem, attempt + 1, extra) }],
         { maxSteps: 4, requestContext },
       )) as { text?: string } | undefined
       const raw = cleanSegText(res?.text || '')
@@ -277,7 +296,7 @@ async function generateZhPrompt(
 export async function startVideoPromptBatch(
   episodeId: number,
   dramaId: number,
-  opts: { model?: string; configId?: number } = {},
+  opts: { model?: string; configId?: number; extra?: string } = {},
   storyboardIds?: number[],
 ): Promise<{ started: boolean; total: number }> {
   if (tasks.get(episodeId)?.status === 'running') return { started: false, total: -1 }
@@ -327,7 +346,7 @@ export async function startVideoPromptBatch(
       logTaskProgress('VideoPrompt', 'batch-shot', { episodeId, storyboardId: sb.id, index: task.completed + task.failed + 1, total: task.total })
       try {
         // 1) 英文版：整体生成 → 逐组核定（超标组单独重写）→ 全达标才拼
-        const en = await generateEnByStages(agent, sb, videoLabel, requestContext, episodeId)
+        const en = await generateEnByStages(agent, sb, videoLabel, requestContext, episodeId, opts.extra)
         if (!en.ok) {
           task.failed++
           continue

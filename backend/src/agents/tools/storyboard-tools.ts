@@ -9,7 +9,7 @@ import { db, getInsertId, schema } from '../../db/index.js'
 import { eq } from 'drizzle-orm'
 import { now } from '../../utils/response.js'
 import { logTaskError, logTaskProgress, logTaskSuccess } from '../../utils/task-logger.js'
-import { PROMPT_EN_LIMIT } from '../../services/video-prompts.js'
+import { PROMPT_EN_LIMIT, debugLog } from '../../services/video-prompts.js'
 import { getDramaId, getEpisodeId } from '../context.js'
 
 async function syncStoryboardCharacters(storyboardId: number, characterIds: number[]) {
@@ -397,6 +397,9 @@ const updateStoryboard = createTool({
         logTaskError('StoryboardTool', 'video-prompt-en-too-long', {
           episodeId, storyboardId: storyboard_id, len: en.length, limit: PROMPT_EN_LIMIT,
         })
+        // 记下被拒的原文长度与前 200 字符：这是唯一能看到「Agent 到底写了多长、
+        // 有没有在改善」的地方（单条按钮走裸 Agent，没有其它日志）
+        debugLog(episodeId, storyboard_id, 'gate-reject', en, { over: en.length - PROMPT_EN_LIMIT })
         return {
           error:
             `video_prompt_en 超长，已拒绝写入：当前 ${en.length} 字符，上限 ${PROMPT_EN_LIMIT} 字符。` +

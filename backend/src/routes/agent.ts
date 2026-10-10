@@ -68,7 +68,7 @@ app.post('/:type/chat', async (c) => {
   try {
     const result = await agent.generate(
       [{ role: 'user', content: message }],
-      { maxSteps: 20, requestContext },
+      { maxSteps: 6, requestContext },
     )
 
     const elapsed = ((performance.now() - startTime) / 1000).toFixed(1)

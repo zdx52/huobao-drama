@@ -152,7 +152,12 @@ app.post('/:id/generate-video-prompts', async (c) => {
   const storyboardIds = Array.isArray(body.storyboard_ids)
     ? body.storyboard_ids.map(Number).filter((n: number) => Number.isInteger(n) && n > 0)
     : undefined
-  const result = await startVideoPromptBatch(ep.id, ep.dramaId, { model: body.model || undefined, configId: body.config_id ?? undefined }, storyboardIds)
+  const extra = typeof body.extra === 'string' ? body.extra.trim() : ''
+  const result = await startVideoPromptBatch(
+    ep.id, ep.dramaId,
+    { model: body.model || undefined, configId: body.config_id ?? undefined, extra: extra || undefined },
+    storyboardIds,
+  )
   if (result.total === -1) return success(c, { status: 'running', already_running: true })
   if (!result.started) return success(c, { status: 'idle', total: 0 })
   return success(c, { status: 'running', total: result.total })
