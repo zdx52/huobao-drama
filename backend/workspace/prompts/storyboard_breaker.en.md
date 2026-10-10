@@ -35,11 +35,15 @@ Duration rules (hard constraints):
   - **When breaking down, aim at the "recommended" figure - do not run up to the ceiling**: dialogue never fills the whole window (actions, pauses, breathing and ambience need room too), so **<= (segment seconds - 4) x 3.5**
   - Quick reference (recommended / hard ceiling): 8 s **14 / 18 chars** | 10 s **21 / 27** | 12 s **28 / 36** | 15 s **38 / 49**
   - Measured speed: H3 Chinese narration = **5-6 chars/second** (measured: a 40-char narration ran to 9.9 s and filled the tail)
-  - **When it does not fit (in this order)**: (1) **rewrite/compress** (next bullet) (2) move the excess to the next segment (3) express it visually. Never cram; the "last beat has no dialogue" trick does not count (the earlier line reads straight through the ending)
-  - **When the script has long dialogue, rewrite rather than copy (2026-10-10)**: scripts often carry a single line of dozens of characters - **never paste the whole original sentence into description**; instead **keep the meaning and the character's voice and rewrite it into short lines that fit the budget**: split into several sentences, drop filler and repetition, move part of the information into the visuals or the next segment
-    - Boundaries: **the meaning must not change** (what is said, in what attitude) and **the voice must not change** (formal/colloquial, dialect, period feel) - compress the wording only
-    - Example: script "I told you how many times, this part has to be machined on the No.3 lathe, but you used the No.2, and now look, it's scrapped!" (44 chars) -> for a 10 s segment write "How many times have I said it, this part goes on the No.3 lathe." (17 chars) and play "scrapped" in the visuals
-    - **The dialogue in description is what the finished video will say**: the downstream prompt stage copies it **word for word**, so however you write it is how it will be spoken - read the line aloud and count the seconds before saving
+  - **Rewrite BEFORE you write the line, never compress afterwards (user decision 2026-10-10: compressing after the fact is slow, it must be right the first time)**: scripts often carry a single line of dozens of characters. **Do not copy the original into description first and fix it later once you notice it overflows** - that means going back and forth, a big waste of time. Correct order:
+    1. **Read** the original script line
+    2. **Count** its characters
+    3. **If over budget, rewrite it down to budget first** (fix it in your head, then write)
+    4. **Write it into description**, then **count once more on the spot** to confirm it fits
+  - **Boundaries of the rewrite**: **the meaning must not change** (what is said, in what attitude) and **the voice must not change** (formal/colloquial, dialect, period feel) - compress the wording only: split into several sentences, drop filler and repetition, move part of the information into the visuals or the next segment
+  - Example: script "I told you how many times, this part has to be machined on the No.3 lathe, but you used the No.2, and now look, it's scrapped!" (44 chars) -> **write it straight as** "How many times have I said it, this part goes on the No.3 lathe." (17 chars) for a 10 s segment, and play "scrapped" in the visuals - **not 44 chars first and squeezed down to 17 later**
+  - **The dialogue in description is what the finished video will say**: the downstream prompt stage copies it **word for word**
+  - **Only if it truly cannot be rewritten into budget**: move the excess to the next segment or express it visually. Never cram; the "last beat has no dialogue" trick does not count (the earlier line reads straight through the ending)
   - **Self-check**: count every segment; over budget -> split or convert to visuals on the spot
 
 video_prompt rules (hard constraints):
