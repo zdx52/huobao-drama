@@ -5,11 +5,11 @@ description: Video prompt specification — generates a time-segmented video-gen
 
 # Video Prompt (storyboard segment → video_prompt)
 
-From a single storyboard segment's description (containing the 【镜头N】 sub-shot structure and dialogue/narration) / atmosphere / duration, generate the `video_prompt` that drives AI video generation. **One storyboard segment = one 8-15-second video, with cuts allowed inside it**: consecutive segments may be different shots (change of shot size/angle/subject), joined with hard cuts; but the whole segment **never crosses scenes** and never uses flashbacks.
+From a single storyboard segment's description (containing the 【镜头N】 sub-shot structure and dialogue/narration) / atmosphere / duration, generate the `video_prompt` that drives AI video generation. **One storyboard segment = one 8-10-second video, with cuts allowed inside it**: consecutive segments may be different shots (change of shot size/angle/subject), joined with hard cuts; but the whole segment **never crosses scenes** and never uses flashbacks.
 
 > **Mandatory since 2026-10-09: produce BOTH versions in one batch.**
 > `video_prompt` (Chinese working version — what the UI shows and the user edits) + `video_prompt_en` (English send version — what is actually sent for video generation).
-> The English rules live in the "English send version (official H3 Ref2VA six sections + leading CAST/BLOCKING)" section at the end of this file; everything below is the Chinese version's rules.
+> The English rules live in the "English send version (official H3 Ref2VA six sections)" section at the end of this file; everything below is the Chinese version's rules.
 > When saving you must pass three keys: `storyboard_id`, `video_prompt`, `video_prompt_en`.
 
 ## Format
@@ -18,9 +18,10 @@ The **first line of the `video_prompt` is the header**: first introduce which ch
 
 ```
 Characters: @Xiaoming, @Xiaohong; Scene: @Coffee Shop.
-0-3s: @Coffee Shop, close shot, static camera; @Xiaoming looks down at his phone, fingers repeatedly tapping the table, expression anxious.
-3-6s: Cut to a wide shot of the doorway; the doorbell rings as @Xiaohong pushes the door open and walks in, bringing in a gust of cold air.
-6-9s: Cut back to a medium shot; @Xiaohong walks over with a smile and sits down across from Xiaoming; Xiaoming says: "You finally made it."
+0-2s: @Coffee Shop, medium shot, static camera; @Xiaoming looks down at his phone, fingers repeatedly tapping the table, expression anxious; no human voice in this segment, only the hiss of the coffee machine.
+2-5s: The camera cuts to a wide shot of the doorway; the doorbell rings as @Xiaohong pushes the door open and walks in, bringing in a gust of cold air.
+5-8s: The camera cuts back to a medium close-up; @Xiaohong walks over with a smile and sits down across from Xiaoming.
+8-10s: @Xiaohong sits down; Xiaoming says: "You finally made it."
 ```
 
 Header rules:
@@ -28,13 +29,13 @@ Header rules:
 - When a prop has a notable appearance, it may be appended to the header (e.g. `; Props: @Letter`)
 - The header is its own line, ending with a period, followed by the time segments
 
-Split into 3-second segments, each segment on its own line separated by newlines, with time ranges continuous and adjoining (no overlaps, no gaps).
+Split into beats following the storyboard (beat lengths come from the 【镜头N】 timeline in the segment `description`, e.g. `0-2/2-5/5-8/8-10` seconds), each beat on its own line separated by newlines, with time ranges continuous and adjoining (no overlaps, no gaps).
 
 ## Mapping to the Storyboard Description
 
 The `description` is the sole content source of the video_prompt (visuals, actions, dialogue, and narration are all in it). Conversion rules:
 
-- Each `【镜头N】` in the `description` maps to **1-2 consecutive 3-second segments** — same order, no omissions, no merging, no new sub-shots
+- Each `【镜头N】` in the `description` maps to **one time segment** — same order, no omissions, no merging, no new sub-shots
 - Dialogue/narration is extracted from the "CharacterName says: "..."" / "Narration: ..." entries inside the corresponding `【镜头N】` and assigned to that sub-shot's mapped segments; **do not invent new dialogue beyond the description**
 - Visual actions follow the `description`; `atmosphere` is only used to supplement each segment's lighting, color tone, and mood descriptions
 
@@ -49,7 +50,7 @@ Organize each segment's content in this order (items with no content may be omit
 - **Shot size/camera move**: one camera state per segment (close shot / medium shot / wide shot / close-up; static / push / pull / pan / tracking); the camera move is continuous within a single sub-shot and may change after a cut
 - **Action**: one main action per segment, with concrete visible verbs (walk, turn around, look up, clench, pause)
 - **All emotion must become visible description**: no abstract words like "he is very sad / the mood is tense" — write it as "he lowers his head, fingers clench the rim of the cup, breathing grows heavier"
-- **Dialogue/narration**: write "CharacterName says: "line""; narration as "Narration: content"; a long line that cannot be spoken within 3 seconds is split across multiple segments; a segment without dialogue must still spell out "**no human voice in this segment, only … ambience**" (noting "machines keep roaring" alone is not enough — the model assumes you forgot the voices and invents speech)
+- **Dialogue/narration**: write "CharacterName says: "line""; narration as "Narration: content"; a long line that cannot be spoken within its beat is split across multiple beats; a segment without dialogue must still spell out "**no human voice in this segment, only … ambience**" (noting "machines keep roaring" alone is not enough — the model assumes you forgot the voices and invents speech)
 
 ## Reference Rules
 
@@ -104,7 +105,8 @@ After writing the body, **walk through it one beat (one time range) at a time** 
 
 - [ ] **Every beat carries an audio declaration**: either dialogue/narration (`Narration: …` / `X says: "…"`), or the explicit line "no human voice in this segment, only … ambience". **A beat with neither = the model improvises**
 - [ ] **No dialogue/narration within the first 2s or the last 2s**; for segment 2 of a chain, **beat 1 is the hold only** (carry the previous framing + a breath/weight-shift/eyeline micro-motion), dialogue starts at beat 2
-- [ ] **Total spoken characters ≤ (segment seconds − 4) × 4.5** (≤27 for a 10s segment, ≤25 recommended)
+- [ ] **Per-beat dialogue budget (harder — satisfy this first)**: **each beat's own** dialogue length ≤ that beat's seconds × 4.5 (**≤9 for a 2s beat**, ≤13 for 3s, ≤18 for 4s). "Under the segment budget" ≠ "under every beat's budget"
+- [ ] **Whole-segment dialogue budget**: total ≤ **(segment seconds − 4) × 4.5** (≤27 for a 10s segment, ≤25 recommended). **Both must hold — take whichever is stricter** (per-beat stops a pile-up in one short beat; the segment budget stops you filling the ~6s window)
 
 **Measured failure (do not repeat)**:
 
@@ -128,12 +130,12 @@ From segment 2 on, the **runner automatically prepends the airlock head** (hold 
 - **Leave the tail silent (1.5–2s)**: the chain pins the **previous segment's closing audio** into the next segment's head, so if the previous segment ends mid-speech the next head comes back as garbled speech (measured: correlation between seg2's first 1.2s and seg1's last 1.2s was only 0.045 — new, garbled speech). Finish dialogue/narration 1.5–2s before the end and leave the tail to action and ambience.
 - **Spell out silence**: a beat without dialogue/narration must state "**no human voice in this segment, only … ambience**", otherwise H3 invents speech in quiet shots (official guide: write the audio fields explicitly and regenerate; the relay already adds overall_soundscape, but the body should say it too)
 - **Dialogue window (every segment, single re-shoots included)**: write **no dialogue/narration in the first 2s or the last 2s** — the chain pins the previous segment's closing audio into this segment's head, so a half-finished previous tail plus a new line at this segment's head fight each other and sound like garbled speech (measured; continuous sound such as counting or drumming chains cleanly because the next segment continues the same activity). **A 10s segment has only ~6s of dialogue window.**
-- **Dialogue budget (hard number)**: total spoken characters per segment ≤ **(segment seconds − 4) × 4.5** (≈27 for 10s, **≤25 recommended**). Measured speaking rate 5–6 characters/second — seg1 carried 40 characters of narration and its audio ran to 9.9s, filling the tail. Over budget → cut information or show it visually; "the last beat has no dialogue" does not count, because the earlier line reads through the ending
+- **Dialogue budget (hard numbers — both must hold, take the stricter)**: ① **per beat**: each beat's characters ≤ that beat's seconds × 4.5 (≤9 for a 2s beat — **satisfy this first**) ② **per segment**: total ≤ **(segment seconds − 4) × 4.5** (≈27 for 10s, **≤25 recommended**). Measured speaking rate 5–6 characters/second — seg1 carried 40 characters of narration and its audio ran to 9.9s, filling the tail. Over budget → cut information or show it visually; "the last beat has no dialogue" does not count, because the earlier line reads through the ending
 - About 0.9s of the head is trimmed on delivery, so beats shift earlier; write timecodes against the sampled timing and do not offset by hand (just be aware of the shift)
 
 ## Timeline Rules
 
-- Number of segments = storyboard-segment duration ÷ 3 seconds (rounded up); the segment time ranges must add up exactly to the total segment duration
+- Number of beats = the count of `【镜头N】` entries in that segment’s `description`; the beat time ranges must add up exactly to the total segment duration (8-10 seconds)
 - Content pacing: the first segment establishes → middle segments advance the action/conflict → the final segment lands on the result or emotional beat
 
 ## Prohibitions
@@ -147,7 +149,7 @@ From segment 2 on, the **runner automatically prepends the airlock head** (hold 
 
 Call `update_storyboard` to update only this storyboard segment's `video_prompt` field; do not modify any other field, and do not re-breakdown the whole episode.
 
-## English send version (official H3 Ref2VA six sections + leading CAST/BLOCKING) — established 2026-10-09
+## English send version (official H3 Ref2VA six sections) — established 2026-10-09 (the self-added leading CAST/BLOCKING was dropped 2026-10-10)
 
 `video_prompt_en` is **the version actually sent to the video model**. Its rules come from the official MiniMax H3 prompt-writing guide (Ref2VA full-reference rewrite output format). **Everything is English except dialogue, lyrics, and text visible in frame.**
 
@@ -155,9 +157,16 @@ Call `update_storyboard` to update only this storyboard segment's `video_prompt`
 The MiniMax H3 prompt limit is **7000 characters — an official hard limit that cannot be relaxed** (RunDiffusion / AtlasCloud / MiniMax official GitHub all state this), and the backend prepends a photorealistic style header before sending, so headroom is mandatory.
 **Going over means the request is rejected outright and no video is produced** (measured 2026-10-09: sb147 reached 7608 characters → 8403 after concatenation → error "prompt too long: MiniMax H3 limit 7000 characters, current 8403").
 
-Per-section quotas (allocate to these; count each section when done):
-**When over budget, cut in this order**: ① redundant clauses in `summary` ② `soundscape` effects already stated in the body ③ description in `BLOCKING` that duplicates the body ④ appearance modifiers in `subject_definitions`.
-**Never cut**: `<d>` dialogue, any `fully_preserved` line in `retention_analysis`, `<Picture N>` and the `with` clause, the count lock in `CAST`, the orientation and 180-axis in `BLOCKING`.
+Per-section quotas (allocate to these; count each section when done; reconfigured 2026-10-10 to official guidance):
+- `subject_definitions` ≤ 1700
+- `summary` ≤ 340 (official: one short English paragraph)
+- `retention_analysis` ≤ 760
+- `detailed_description` ≤ 2500 (official: 350–500 English words ≈ 1750–2500 characters)
+- `overall_soundscape` ≤ 300 (official: 1–4 sentences)
+- `non_diegetic_music` ≤ 120 (official: 1–3 sentences; write `N/A` when absent)
+- **Total 5720 (+5 newlines = 5725) ≤ 6200 = the whole-prompt hard limit**
+**When over budget, cut in this order**: ① redundant clauses in `summary` ② `soundscape` effects already stated in the body ③ appearance modifiers in `subject_definitions` ④ filler action set-up duplicated in `detailed_description`.
+**Never cut**: `<d>` dialogue, any `fully_preserved` line in `retention_analysis`, `<Picture N>` and the `with` clause.
 
 Six section names, fixed order:
 
@@ -228,7 +237,12 @@ non_diegetic_music:
    - At a subject's **first clear appearance**, describe its features, position in frame, and current action; later shots reuse the same `<Subject N>` **without redefining it**
    - **There is only ONE allowed speaker form** (established 2026-10-09; supersedes every earlier form):
      - **On-screen dialogue** (that shot must actually have the subject present and speaking): `<Subject 2> (S1) says, <d>[Chinese] line</d>`
-     - **Off-screen narration / voice-over**: `<Subject 2>'s voice-over (S1) speaks off-screen while on screen her lips stay completely closed and her mouth does not move: <d>[Chinese] line</d>`
+     - **🔴 Off-screen narration — OFFICIAL wording (fixed 2026-10-10; the self-made phrasing is wrong and retired)**: H3 is trained on one exact phrase. Write it as **`<Subject N> (Sx)` + `says in an off-screen voiceover` + `<d>` block + a lips-closed clause immediately after**:
+       `<Subject 2> (S1) says in an off-screen voiceover: <d>[Chinese] 台词原文</d> while her lips remain completely closed.`
+       - 🔴 The exact phrase `says in an off-screen voiceover` is **MANDATORY, verbatim** (official: *For voiceover, use the exact phrase `says in an off-screen voiceover`. Immediately after every voiceover `<d>` block, state that the corresponding on-screen character's lips remain closed.*)
+       - 🔴 The lips-closed clause goes **immediately AFTER the `<d>` block**, never before it
+       - 🔴 **Banned paraphrases**: `speaks off-screen`, `voice-over`, `narrates`, `<Subject N>'s voice-over (Sx) speaks off-screen` (measured 2026-10-10: the mouth still moved)
+       - 🔴 **Do NOT force the face out of frame** — the official guide never asks for it; a normal medium shot or close-up is fine (user-confirmed: "shots with the face on screen handled narration correctly before")
      - **The narrator MUST be designated as one of the on-screen characters** (usually the protagonist herself) — off-screen narration has no independent audio source, so leaving the narrator unspecified means the model invents a voice
      - **🔴 These two forms are BANNED** (both make the model attach the speaking action to the on-screen figure, causing a moving mouth / a duplicated character): ① `<Subject 2> (S1) says off-screen` ② `A young woman's low restrained voice (S1) speaks off-screen` (voice-description form = narrator never designated; reproduced 2026-10-09)
    - **🔴 The lip lock must share the sentence with the dialogue** (no action description in between): the official example literally reads `She closes her lips`. The lip lock must sit **directly against the `<d>` block**, with no action or frame description inserted (measured 2026-10-09: lip lock at start of beat, dialogue at end, three action clauses in between → the mouth still moved)
@@ -245,4 +259,4 @@ non_diegetic_music:
 5. **`overall_soundscape`** — ambience (English); shots without dialogue state no human voice: `(No human voice in this segment except the dialogue lines explicitly written below; no narration, no humming, no singing.)`
 6. **`non_diegetic_music`** — score audible only to the audience; `N/A` when absent
 
-**Self-check before saving**: official six section names present and in order / official six section names present and in order / **prop surface text content absent** (only `the printed side` / carrier + action phrasing appears — **no** quoted paper text anywhere) / every `subject_definitions` line has `<Picture N>` plus a `with` clause / `retention_analysis` contains no `(Sx)` / all dialogue copied **as whole sentences** verbatim from the description (no truncation, no rewording; dropped sentences marked) / narrator designated as one of the on-screen characters and the voice card written as `<Subject N>'s off-screen narration` / lip lock sitting immediately next to the `<d>` line (not separated by action) / `Same exposure...` appears once in the style sentence only (not repeated per shot) / body is English except `<d>` and on-screen text
+**Self-check before saving**: official six section names present and in order / **prop surface text content absent** (only `the printed side` / carrier + action phrasing appears — **no** quoted paper text anywhere) / every `subject_definitions` line has `<Picture N>` plus a `with` clause / `retention_analysis` contains no `(Sx)` / all dialogue copied **as whole sentences** verbatim from the description (no truncation, no rewording; dropped sentences marked) / narrator designated as one of the on-screen characters and the voice card written as `<Subject N>'s off-screen narration` / lip lock sitting immediately next to the `<d>` line (not separated by action) / `Same exposure...` appears once in the style sentence only (not repeated per shot) / body is English except `<d>` and on-screen text
