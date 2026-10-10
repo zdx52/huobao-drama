@@ -21,6 +21,7 @@ Hard constraints (must be followed):
 
 Each segment requires the following fields:
 - character_ids: the list of character IDs involved in this segment — may be empty or contain multiple characters; must be chosen from characters
+  - **🔴 The binding must match who actually appears in the description (measured 2026-10-10: one segment featured only two characters in its description yet also bound a third who never appeared, so the app's reference-asset panel showed a character who is not in the shot)** — bind only characters who **actually appear or speak in the 【镜头N】 shots**; **never bind a character the description does not mention**. Better too few than too many: a wrong binding drags an irrelevant reference image and identity card into video generation and pollutes the frame
 - prop_ids: the list of key prop IDs appearing in this segment (bound when a prop is seen, used, or shown in close-up) — may be empty; must be chosen from props
 - scene_id: if it can be matched to an existing scene in scenes, the correct scene_id must be filled in; leave empty when there is no match
 - duration: total segment duration, 8-15 seconds
@@ -44,7 +45,10 @@ Duration rules (hard constraints):
   - Example: script "I told you how many times, this part has to be machined on the No.3 lathe, but you used the No.2, and now look, it's scrapped!" (44 chars) -> **write it straight as** "How many times have I said it, this part goes on the No.3 lathe." (17 chars) for a 10 s segment, and play "scrapped" in the visuals - **not 44 chars first and squeezed down to 17 later**
   - **The dialogue in description is what the finished video will say**: the downstream prompt stage copies it **word for word**
   - **Only if it truly cannot be rewritten into budget**: move the excess to the next segment or express it visually. Never cram; the "last beat has no dialogue" trick does not count (the earlier line reads straight through the ending)
-  - **Self-check**: count every segment; over budget -> split or convert to visuals on the spot
+  - **🔴 Multiple dialogue lines must be ADDED UP (measured 2026-10-10: 2 of 27 segments overflowed, both dialogue scenes)**: a segment often carries 2-3 lines back and forth — **each line looks short on its own, but the sum overflows**. Add up ALL dialogue + narration in the segment and compare against the budget — it is not "each line fits"
+    - **At most 2 exchanges of dialogue per segment** (one line + one reply = 1 exchange); if there are more, move the rest to the next segment
+    - Example: a 10 s segment holding "Wrong place, girlie?" + "Jianguo, she's got an apprentice slip." + "Apprentice? When did No.2 shop ever take a woman fitter?" = 32 chars -> **over the 27 hard ceiling** -> keep only the first two (18 chars) and move the third to the next segment
+  - **Self-check**: count every segment (**including the sum of all its dialogue**); over budget -> split or convert to visuals on the spot
 
 Additional requirements:
 - Prefer reusing the scene_id values returned by read_storyboard_context — do not invent new scenes out of thin air
