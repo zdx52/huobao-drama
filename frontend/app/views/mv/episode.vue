@@ -746,8 +746,21 @@ const route = useRoute()
 const projectId = Number(route.params.id)
 const curSeriesId = ref(null)     // 这首 MV 挂在哪个 MV 项目下（建资产/回退用）
 
-
-/** 2026-10-19 素材库：本项目资产存进公共库 / 公共库资产引用进本项目 */
+const promptBusy = ref(null)
+const viewer = ref({ open: false, src: '', title: '' })
+const editRatio = ref('16:9')
+// 顶部三个模型选择器 —— 照短剧 ModelSelect 的口径：选项来自该类全部启用配置，选中值是可选的 'provider/model'
+const textConfigs = ref([])
+const imageConfigs = ref([])
+const videoConfigs = ref([])
+async function loadConfigs() {
+  const [t, i, v] = await Promise.all([
+    aiConfigAPI.list('text').catch(() => []),
+    aiConfigAPI.list('image').catch(() => []),
+    aiConfigAPI.list('video').catch(() => []),
+  ])
+  textConfigs.value = t || []; imageConfigs.value = i || []; videoConfigs.value = v || []
+}
 function configModels(cfg) {
   const raw = cfg?.model
   if (!raw) return []
