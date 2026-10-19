@@ -169,31 +169,12 @@
         </div>
         <div v-if="!assets.length" class="mv-hint">还没有资产 —— 点上面的「提取人物和场景」。</div>
 
-        <!-- 公共素材库（2026-10-19）：所有 MV 共用；引用进本项目只插记录，图片文件共用不复制 -->
-        <template v-if="libraryAssets.length">
-          <div class="mv-group-head"><span class="mv-group-name">公共素材库</span><span class="tag">{{ libraryAssets.length }}</span></div>
-          <div class="mv-char-grid">
-            <article v-for="a in libraryAssets" :key="'lib' + a.id" class="card mv-char-card">
-              <div class="mv-char-main">
-                <div class="mv-portrait">
-                  <img v-if="a.image" :src="staticUrl(a.image)" :alt="a.name" class="previewable-image" />
-                  <div v-else class="mv-cover-empty">未出图</div>
-                  <span class="mv-badge is-ready">{{ a.kind === 'character' ? '人物' : '场景' }}</span>
-                </div>
-                <div class="mv-char-head"><span class="mv-char-name">{{ a.name }}</span></div>
-                <button class="btn btn-sm" @click.stop="importAsset(a)">引用到本项目</button>
-              </div>
-            </article>
-          </div>
-        </template>
-
         <!-- 人物（照短剧素材库：横排卡，图区固定 16:9） -->
         <template v-if="characters.length">
           <div class="mv-group-head"><span class="mv-group-name">人物</span><span class="tag">{{ characters.length }}</span></div>
           <div class="mv-char-grid">
             <article v-for="a in characters" :key="'c' + a.id" class="card mv-char-card" tabindex="0" role="button"
               @click="openEdit(a)" @keydown.enter.prevent="openEdit(a)">
-              <button class="mv-del" title="存入公共素材库" style="right:34px;color:var(--muted-foreground)" @click.stop="shareAsset(a)">☆</button>
               <button class="mv-del" title="删除" @click.stop="askRemoveAsset(a)">✕</button>
               <div class="mv-char-main">
                 <div class="mv-portrait">
@@ -238,7 +219,6 @@
           <div class="mv-scene-grid">
             <article v-for="a in scenes" :key="'s' + a.id" class="card mv-scene-card" tabindex="0" role="button"
               @click="openEdit(a)" @keydown.enter.prevent="openEdit(a)">
-              <button class="mv-del" title="存入公共素材库" style="right:34px;color:var(--muted-foreground)" @click.stop="shareAsset(a)">☆</button>
               <button class="mv-del" title="删除" @click.stop="askRemoveAsset(a)">✕</button>
               <div class="mv-cover" :style="{ aspectRatio: coverAspect }">
                 <img v-if="a.image" :src="staticUrl(a.image)" :alt="a.name" class="previewable-image" @click.stop="openViewer(a)" />
@@ -766,33 +746,8 @@ const route = useRoute()
 const projectId = Number(route.params.id)
 const curSeriesId = ref(null)     // 这首 MV 挂在哪个 MV 项目下（建资产/回退用）
 
-const libraryAssets = ref([])   // 公共素材库（所有 MV 共用；图片文件共用，不复制）
 
 /** 2026-10-19 素材库：本项目资产存进公共库 / 公共库资产引用进本项目 */
-async function shareAsset(a) {
-  if (!confirm(`把「${a.name}」存进公共素材库？以后所有 MV 都能引用它。`)) return
-  const r = await call(() => api.post(`/mv/projects/${pj.value.id}/assets/${a.id}/share`))
-  if (r) await refresh()
-}
-async function importAsset(a) {
-  const r = await call(() => api.post(`/mv/projects/${pj.value.id}/assets/${a.id}/import`))
-  if (r) await refresh()
-}   // 正在排队的资产 id（各自独立，服务器串行执行）
-const promptBusy = ref(null)
-const viewer = ref({ open: false, src: '', title: '' })
-const editRatio = ref('16:9')
-// 顶部三个模型选择器 —— 照短剧 ModelSelect 的口径：选项来自该类全部启用配置，选中值是可选的 'provider/model'
-const textConfigs = ref([])
-const imageConfigs = ref([])
-const videoConfigs = ref([])
-async function loadConfigs() {
-  const [t, i, v] = await Promise.all([
-    aiConfigAPI.list('text').catch(() => []),
-    aiConfigAPI.list('image').catch(() => []),
-    aiConfigAPI.list('video').catch(() => []),
-  ])
-  textConfigs.value = t || []; imageConfigs.value = i || []; videoConfigs.value = v || []
-}
 function configModels(cfg) {
   const raw = cfg?.model
   if (!raw) return []
@@ -1303,7 +1258,6 @@ function sync(r) {
   videoTasks.value = r.videoTasks || []
   mergeList.value = r.merges || []
   assets.value = r.assets || []
-  libraryAssets.value = r.libraryAssets || []
   storyPrompt.value = r.project.storyPrompt || ''
   lyrics.value = r.project.lyrics || ''
   editStyle.value = r.project.style || ''
