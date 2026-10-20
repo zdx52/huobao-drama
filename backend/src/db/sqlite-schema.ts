@@ -421,6 +421,11 @@ export const sqliteSchemaStatements = [
   `ALTER TABLE mv_projects ADD COLUMN vocal_stem TEXT`,
   `ALTER TABLE mv_shots ADD COLUMN task_ids TEXT`,
   `ALTER TABLE mv_projects ADD COLUMN series_id INTEGER`,
+  // 2026-10-20 成片字幕：片头主创三项 + 歌词时间轴（自动对轴产出，LRC 文本）
+  `ALTER TABLE mv_projects ADD COLUMN song_title TEXT`,
+  `ALTER TABLE mv_projects ADD COLUMN lyricist TEXT`,
+  `ALTER TABLE mv_projects ADD COLUMN composer TEXT`,
+  `ALTER TABLE mv_projects ADD COLUMN lyric_lrc TEXT`,
   `ALTER TABLE mv_assets ADD COLUMN series_id INTEGER`,
   `ALTER TABLE mv_assets ADD COLUMN scope TEXT DEFAULT 'project'`,
   `ALTER TABLE mv_assets ADD COLUMN source_asset_id INTEGER`,

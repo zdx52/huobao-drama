@@ -26,7 +26,7 @@ const REPO_ROOT = path.resolve(DESKTOP_ROOT, '..')
 const BACKEND_BUNDLE = path.join(DESKTOP_ROOT, 'build', 'backend.mjs')
 
 /** workspace 模板版本：内置模板更新时递增，触发向用户目录补缺失文件 */
-const TEMPLATE_VERSION = '8'
+const TEMPLATE_VERSION = '12'
 const STORAGE_CONFIG_FILE = 'storage-config.json'
 
 let mainWindow: BrowserWindow | null = null
@@ -134,13 +134,18 @@ export function normCase(p: string): string {
  * - 目标无版本标记（首启动）或版本较旧 → 只补缺失文件，永不覆盖用户编辑
  * - 版本一致 → 跳过
  * 例外：prompts/ 随版本升级强制覆盖——prompt 与代码内 DEFAULT_PROMPTS 同源迭代
- * （设置页有「恢复默认」，且编辑场景少）；skills/ 保持只增不覆盖（可能有用户新建）
+ * （设置页有「恢复默认」，且编辑场景少）；skills/ 只增不覆盖（可能有用户新建），
+ * 但 skills/prompt-generator/ 是我们自带的规则集，必须随版本覆盖，否则改了规则发出去不生效
+ * （2026-10-19：不加这条的话，用户目录里那份旧 SKILL.md 永远赢）
  */
 function syncWorkspaceTemplate(templateDir: string, destDir: string) {
   const marker = path.join(destDir, '.template-version')
   if (fs.existsSync(marker) && fs.readFileSync(marker, 'utf8').trim() === TEMPLATE_VERSION) return
   fs.cpSync(templateDir, destDir, { recursive: true, force: false, errorOnExist: false })
   fs.cpSync(path.join(templateDir, 'prompts'), path.join(destDir, 'prompts'), { recursive: true, force: true })
+  fs.cpSync(path.join(templateDir, 'skills', 'prompt-generator'), path.join(destDir, 'skills', 'prompt-generator'), { recursive: true, force: true })
+  // MV 自己的规范目录（skills/mv）——与短剧隔离，升级时同样强制覆盖
+  fs.cpSync(path.join(templateDir, 'skills', 'mv'), path.join(destDir, 'skills', 'mv'), { recursive: true, force: true })
   fs.writeFileSync(marker, TEMPLATE_VERSION)
 }
 

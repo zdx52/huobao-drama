@@ -23,33 +23,46 @@
         </div>
       </div>
       <div class="mv-top-selects">
-        <ModelSelect :label="'文本'" v-model="mvTextModel" :options="textModelOptions"
-          :default-label="'默认（' + (textModelOptions[0]?.model || '未配') + '）'" :show-config="hasMultiConfigs(textModelOptions)" />
-        <ModelSelect :label="'图片'" v-model="mvImageModel" :options="imageModelOptions"
-          :default-label="'默认（' + (imageModelOptions[0]?.model || '未配') + '）'" :show-config="hasMultiConfigs(imageModelOptions)" />
-        <ModelSelect :label="'视频'" v-model="mvVideoModel" :options="videoModelOptions"
-          :default-label="'默认（' + (videoModelOptions[0]?.model || '未配') + '）'" :show-config="hasMultiConfigs(videoModelOptions)" />
         <span class="mv-sel" title="画幅（在「原始内容」页改）">
           <span class="mv-sel-k">画幅</span><span class="mv-sel-v">{{ editRatio }}</span>
         </span>
       </div>
       <div class="head-actions">
-        <span v-if="busy && stepMsg" class="busy-hint">{{ stepMsg }}</span>
+        <span v-if="busy || (promptResult && tab !== 'export')" :class="['pb-inline', { 'pb-inline-result': !busy, 'pb-result': !busy && promptResult, ok: !busy && promptResult?.ok, bad: !busy && promptResult && !promptResult.ok }]"
+          :title="busy ? (stepMsg || '处理中') : (promptResult?.text || '')">
+          <template v-if="busy">
+            <span class="pb-bar">
+              <span v-if="promptStep" class="pb-bar-fill" :style="{ width: Math.round((promptStep.step / promptStep.total) * 100) + '%' }" />
+              <span v-else class="pb-bar-run" />
+            </span>
+            <span class="pb-text">
+              <template v-if="promptStep">{{ promptStep.label }} · 第 {{ promptStep.step }}/{{ promptStep.total }} 步</template>
+              <template v-else>{{ stepMsg || '处理中…' }}</template>
+              <template v-if="busySeconds >= 2"> · {{ busySeconds }}s</template>
+            </span>
+          </template>
+          <template v-else>
+            <span class="pb-text">{{ promptResult.text }}</span>
+            <button type="button" class="mv-result-close" title="关掉" @click.stop="promptResult = null">×</button>
+          </template>
+        </span>
         <template v-if="tab === 'video'">
-          <span class="mv-step-hint">①</span>
           <button class="btn btn-sm" :class="{ 'is-on': !!pj.vocalStem }" @click="askSeparate" :disabled="busy || separating"
             :title="pj.vocalStem ? '已分离：' + pj.vocalStem : '用 demucs 分出人声轨，供唱/非唱判据用'">
             {{ separating ? '分离中…' : (pj.vocalStem ? '已分离人声' : '人声分离') }}
           </button>
-          <span class="mv-step-hint">②</span>
           <input v-model.number="maxSeconds" class="input mv-num" type="number" min="5" max="15" step="0.5" title="最长切分（秒，H3 上限 15）" />
           <button class="btn btn-sm" @click="genShots" :disabled="busy || !pj.vocalStem"
             :title="pj.vocalStem ? (shots.length ? '按人声轨重新切分（会重建现有分镜）' : '按人声轨切分并标唱/非唱') : '先做人声分离——分镜的唱/非唱要靠人声轨判断'">{{ shots.length ? '重新拆分' : '拆分分镜' }}</button>
-          <span class="mv-step-hint">③</span>
-          <button class="btn btn-sm" @click="askGenPrompts" :disabled="busy || !shots.length" title="只给还没有提示词的分镜补上；已生成的不动（要重写点该段的「重新生成」）">批量补齐提示词</button>
+          <label class="field-hint" style="display:inline-flex;align-items:center;gap:4px;cursor:pointer"
+            title="勾上＝全部重写（覆盖已生成的提示词）；不勾＝只补还没有提示词的段">
+            <input type="checkbox" v-model="rewriteAll" />全部重写
+          </label>
+          <button class="btn btn-sm" @click="askGenPrompts" :disabled="busy || !shots.length"
+            :title="rewriteAll ? '按当前人物/场景/分镜全部重写一遍（会覆盖已生成的提示词）' : '只给还没有提示词的分镜补上；已生成的不动（要重写请勾左边「全部重写」）'">
+            {{ rewriteAll ? '全部重写提示词' : '批量补齐提示词' }}
+          </button>
           <button class="btn btn-sm" @click="askCheckAll" :disabled="!shots.length" title="只读文本检查，不会打断正在生成的视频">全部体检</button>
-          <span class="mv-step-hint">④</span>
-          <button class="btn btn-sm" @click="askRenderAll" :disabled="busy || !shots.length">生成全部</button>
           <button class="btn btn-sm" :class="{ 'is-on': selectMode }" @click="toggleSelectMode">{{ selectMode ? '退出批量' : '批量选择' }}</button>
         </template>
         <button class="btn btn-sm" @click="taskDrawer = true">
@@ -85,10 +98,10 @@
             <span class="mv-side-label">合成导出</span>
             <span v-if="pj.outputUrl" class="mv-side-count">✓</span>
           </button>
-          <div v-if="shots.length" class="mv-side-progress">
+          <div v-if="shots.length || outline.length" class="mv-side-progress">
             <div class="mv-side-progress-head">
               <span class="mv-side-progress-title">制作进度</span>
-              <span class="mv-side-progress-count">{{ progressVideo }}/{{ shots.length }}</span>
+              <span class="mv-side-progress-count">{{ progressVideo }}/{{ shots.length || outline.length }}</span>
             </div>
             <div class="mv-side-progress-track">
               <button v-for="p in progressSteps" :key="p.key" type="button" class="mv-side-progress-seg"
@@ -122,9 +135,26 @@
           <BaseSelect v-model="editRatio" :options="RATIOS" placeholder="画幅" @update:model-value="saveRatio" />
           <span class="field-hint">人物板固定 16:9；场景图和成片按这个比例（改了会重建画面，已出的图和已出的片不会自动重做）</span>
           <span class="field-hint">歌：{{ pj.songFile }}（{{ Number(pj.songSeconds || 0).toFixed(1) }}s）</span>
+          <button class="btn btn-sm" :class="{ 'is-on': !!pj.vocalStem }" :disabled="busy || separating"
+            :title="pj.vocalStem ? '已分离：' + pj.vocalStem : '用 demucs 分出人声轨（分镜的唱/非唱要靠它）'"
+            @click="askSeparate">
+            {{ separating ? '分离中…' : (pj.vocalStem ? '重新分离人声' : '人声分离') }}
+          </button>
+          <span class="field-hint" :class="{ 'text-accent': !pj.vocalStem }">人声：{{ separating ? '正在分离（第一次要几分钟，可以先去填歌词）' : (pj.vocalStem ? '已分离' : '未分离') }}</span>
         </div>
-        <label class="mv-label">歌词（可选，一行一句，用来把切点落在句界上）</label>
+        <label class="mv-label">歌词（一行一句；既用来把切点落在句界上，也是成片字幕的原文）</label>
         <textarea v-model="lyrics" class="input textarea" rows="5" placeholder="一行一句，可留空"></textarea>
+        <div class="mv-row mv-credits-row">
+          <span class="mv-label">主创</span>
+          <input v-model="songTitle" class="input mv-credit" placeholder="曲名" @change="saveCredits" />
+          <input v-model="lyricist" class="input mv-credit" placeholder="作词" @change="saveCredits" />
+          <input v-model="composer" class="input mv-credit" placeholder="作曲" @change="saveCredits" />
+          <button class="btn btn-sm" @click="alignLyrics" :disabled="alignBusy || !lyrics.trim()">
+            {{ alignBusy ? '对齐中…' : '自动对轴' }}
+          </button>
+          <span class="field-hint">{{ alignMsg || (lyricLrc ? '已对轴，合成时会烧字幕' : '未对轴（合成时只有片头主创字幕）') }}</span>
+          <span class="field-hint">主创三行烧在片头右下角（前 5 秒），歌词逐句烧在底部</span>
+        </div>
         <label class="mv-label">分镜提示词（你写的这支 MV 的画面；初步分镜和人物场景都从它来）</label>
         <textarea v-model="storyPrompt" class="input textarea" rows="10"
           placeholder="把这首歌的画面前后写清（开场什么画面、谁在做什么、场景怎么变、结尾怎么收）"></textarea>
@@ -144,11 +174,15 @@
         <div class="mv-row">
           <button class="btn btn-primary btn-sm" @click="genOutline" :disabled="busy">AI 改写成分镜</button>
           <span class="tag">{{ outline.length }} 段</span>
-          <span class="field-hint">不满意可以再点一次重写</span>
+          <span class="field-hint">依据：{{ lyricLrc ? '歌词句界 + 你写的分镜提示词（段的时间窗由句界算，AI 只写画面）' : '只有分镜提示词（还没对轴 —— 先回第 1 步点「自动对轴」，段界才会落在句子上）' }}</span>
         </div>
         <ol class="mv-outline">
           <li v-for="(o, i) in outline" :key="i">
-            <span class="meta-item">{{ Number(o.start).toFixed(1) }}–{{ Number(o.end).toFixed(1) }}s</span> {{ o.what }}
+            <span class="meta-item">{{ Number(o.start).toFixed(1) }}–{{ Number(o.end).toFixed(1) }}s</span>
+            <textarea class="mv-outline-cell" rows="1" :value="draftOf(o)"
+              placeholder="这一段的画面（可直接改）"
+              @input="e => { setDraft(o, e.target.value); resizeCell(e.target) }"
+              @change="e => saveOutlineEntry(o, e.target.value)" />
           </li>
         </ol>
         <div class="mv-row mv-row-end">
@@ -167,7 +201,13 @@
           <button class="btn btn-primary btn-sm" @click="extract" :disabled="busy">提取人物和场景</button>
           <span class="field-hint">重新提取会覆盖当前人物/场景（图和卡要重出）</span>
         </div>
-        <div v-if="!assets.length" class="mv-hint">还没有资产 —— 点上面的「提取人物和场景」。</div>
+        <!-- 提取到同名角色/场景 → 问一句用哪个，不擅自串用别的 MV 的图 -->
+        <div v-for="c in dupConflicts" :key="'dup' + c.assetId" class="mv-warn">
+          素材库里已有同名{{ c.kind === 'character' ? '角色' : '场景' }}「{{ c.libraryName }}」{{ c.hasImage ? '（已有图）' : '' }} —— 要沿用库里的，还是保留这次新提取的？
+          <button class="btn btn-sm btn-primary" :disabled="busy" @click="useLibrary(c)">用素材库现有的</button>
+          <button class="btn btn-sm" :disabled="busy" @click="keepExtracted(c)">保留新提取的</button>
+        </div>
+        <div v-if="!assets.length" class="mv-hint">还没有资产 —— 点上面的「提取人物和场景」（每首歌各自一套，不会带上一首的）。</div>
 
         <!-- 人物（照短剧素材库：横排卡，图区固定 16:9） -->
         <template v-if="characters.length">
@@ -194,8 +234,8 @@
                     <span class="mv-summary-label">妆造</span>{{ a.styling || '（待填写）' }}
                   </div>
                   <div class="mv-card-btns">
-                    <button class="btn btn-sm" @click.stop="genPrompt(a)" :disabled="promptBusy === a.id">
-                      {{ promptBusy === a.id ? '生成中…' : (a.prompt ? '重新生成提示词' : '生成提示词') }}
+                    <button class="btn btn-sm" @click.stop="genPrompt(a)" :disabled="promptBusy.includes(a.id)">
+                      {{ promptBusy.includes(a.id) ? '生成中…' : (a.prompt ? '重新生成提示词' : '生成提示词') }}
                     </button>
                     <button class="btn btn-sm" @click.stop="makeImage(a)" :disabled="a.imageStatus === 'processing'">
                       {{ a.imageStatus === 'processing' ? '出图中…' : (a.image ? '重绘' : '出图') }}
@@ -234,8 +274,8 @@
                   <span class="mv-summary-label">场景</span>{{ a.description || '（待填写）' }}
                 </div>
                 <div class="mv-card-btns">
-                  <button class="btn btn-sm" @click.stop="genPrompt(a)" :disabled="promptBusy === a.id">
-                    {{ promptBusy === a.id ? '生成中…' : (a.prompt ? '重新生成提示词' : '生成提示词') }}
+                  <button class="btn btn-sm" @click.stop="genPrompt(a)" :disabled="promptBusy.includes(a.id)">
+                    {{ promptBusy.includes(a.id) ? '生成中…' : (a.prompt ? '重新生成提示词' : '生成提示词') }}
                   </button>
                   <button class="btn btn-sm" @click.stop="makeImage(a)" :disabled="a.imageStatus === 'processing'">
                     {{ a.imageStatus === 'processing' ? '出图中…' : (a.image ? '重绘' : '出图') }}
@@ -276,6 +316,8 @@
             </div>
             <div class="merge-card-meta">
               <span class="mono">{{ mergeTitle(m) }}</span>
+              <button class="btn btn-sm" :disabled="busy || isUpscaled(m)" :title="isUpscaled(m) ? '这条已经是 1080p' : '按比例放大到高 1080'"
+                @click.stop="upscaleMerge(m)">{{ isUpscaled(m) ? '已 1080p' : '超分 1080p' }}</button>
               <a :href="staticUrl(m.mergedUrl)" download class="btn btn-sm" @click.stop>下载</a>
               <button class="btn btn-sm" @click.stop="askDeleteMerge(m)">删除</button>
             </div>
@@ -350,7 +392,10 @@
                 </div>
                 <div v-if="s.errorMsg" class="video-task-error" :title="s.errorMsg">{{ s.errorMsg.slice(0, 100) }}</div>
               </div>
-              <button class="btn btn-icon btn-sm video-task-action" :title="s.videoUrl ? '重绘' : '生成'" :disabled="s.status === 'processing' || shotPromptBusy === s.id" @click.stop="render(s)">
+              <button v-if="s.status === 'processing'" class="btn btn-icon btn-sm video-task-action is-stop" title="停止这一段（排队中/生成中都可以停）" @click.stop="stopShot(s)">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><rect x="5" y="5" width="14" height="14" rx="2"/></svg>
+              </button>
+              <button v-else class="btn btn-icon btn-sm video-task-action" :title="s.videoUrl ? '重绘' : '生成'" :disabled="shotPromptBusy === s.id" @click.stop="render(s)">
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2"/></svg>
               </button>
             </div>
@@ -377,11 +422,17 @@
                     <div class="mv-shot-field"><span class="k">人物动作</span><span class="v">{{ shotAction(activeShot) }}</span></div>
                     <div class="mv-shot-field"><span class="k">出场</span><span class="v mv-cast">{{ shotCast(activeShot) }}</span></div>
                   </div>
-                  <pre class="mv-outline-pre">{{ outlineTextOf(activeShot) || '（初步分镜里这一段没有文字）' }}</pre>
+                  <textarea class="mv-outline-pre mv-outline-edit" rows="3"
+                    :value="draftOfShot(activeShot)"
+                    placeholder="这一段在初步分镜里的文字（可直接改；生成提示词会以它为准）"
+                    @input="e => { setDraftOfShot(activeShot, e.target.value); resizeCell(e.target) }"
+                    @change="e => saveOutline(activeShot, e.target.value)" />
+                  <div class="dim" style="font-size:11px;margin-top:4px">这一段的画面稿可改；改完这里就是生成提示词的剧情依据。</div>
                   <label class="field" style="margin-top:8px">
                     <span class="field-label">补充说明 <span class="dim">（中文即可，编译时自动转英文追加到提示词末尾；可留空）</span></span>
                     <textarea v-model="activeShot.promptExtra" class="textarea" rows="3"
-                      placeholder="例：这一段她手里不要拿东西；背景不要出现其他人" @blur="saveShot(activeShot)" />
+                      placeholder="例：这一段她手里不要拿东西；背景不要出现其他人"
+                      @input="saveExtraDebounced(activeShot)" @blur="saveShot(activeShot)" />
                   </label>
                   <div class="mv-inline-tags">
                     <span class="tag" :class="activeShot.vocalState === 'non_vocal' ? '' : 'tag-accent'">{{ activeShot.vocalState === 'non_vocal' ? '间奏 · 无唱' : '唱段' }}</span>
@@ -502,16 +553,12 @@
             </div>
            </div>
             <div class="video-player-foot">
-              <div class="video-foot-row">
-                <span class="video-foot-label">分镜时长</span>
-                <input class="input mv-num" type="number" min="2" max="15" step="0.1"
-                  :value="shotSeconds(activeShot).toFixed(3)" @change="setShotDuration(activeShot, $event.target.value)"
-                  :disabled="activeShot.status === 'processing'" title="改完自动吸附到合法帧数（17n+5 帧）并保存" />
-                <span class="dim" style="font-size:11px">s · 修改即保存</span>
-              </div>
               <div class="video-foot-model mono">minimax-h3-mv · {{ pj.aspectRatio || '16:9' }} · {{ shotSeconds(activeShot).toFixed(2) }}s</div>
-              <button class="btn btn-primary show-all" @click="render(activeShot)" :disabled="activeShot.status === 'processing' || shotPromptBusy === activeShot.id">
-                {{ activeShot.status === 'processing' ? '生成中…' : (activeShot.videoUrl ? '重绘' : '生成') }}
+              <button v-if="activeShot.status === 'processing'" class="btn btn-primary show-all" @click="stopShot(activeShot)">
+                停止生成
+              </button>
+              <button v-else class="btn btn-primary show-all" @click="render(activeShot)" :disabled="shotPromptBusy === activeShot.id">
+                {{ activeShot.videoUrl ? '重绘' : '生成' }}
               </button>
             </div>
           </aside>
@@ -557,6 +604,10 @@
               </div>
               <div v-if="r.errorMsg" class="video-task-error" :title="r.errorMsg">{{ r.errorMsg.slice(0, 90) }}</div>
             </div>
+            <button v-if="r.state === 'pending'" class="btn btn-icon btn-sm video-task-action is-stop"
+              title="停止这一段（排队中也能停）" @click.stop="stopShot(r)">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><rect x="5" y="5" width="14" height="14" rx="2"/></svg>
+            </button>
           </div>
           <div v-if="!taskRows.length" class="video-task-empty">还没有生成记录</div>
         </div>
@@ -593,7 +644,12 @@
           <span class="tag" :class="checkDlg.bad ? 'tag-warn' : 'tag-success'">
             {{ checkDlg.bad ? checkDlg.bad + ' 条有问题' : '全部通过' }}
           </span>
-          <button class="btn btn-ghost btn-sm ml-auto" @click="checkDlg = null">关闭</button>
+          <button v-if="checkDlg.bad" class="btn btn-sm btn-primary ml-auto" :disabled="busy || fixing"
+            :title="'把有问题的段落按当前人物/场景/分镜重新生成提示词'"
+            @click="fixChecked">
+            {{ fixing ? '修复中…' : (checkDlg.rows.length === 1 ? '修复这一段' : `一键修复（${checkDlg.bad} 段）`) }}
+          </button>
+          <button class="btn btn-ghost btn-sm" :class="{ 'ml-auto': !checkDlg.bad }" @click="checkDlg = null">关闭</button>
         </div>
         <div class="mv-check-body">
           <div v-for="r in checkDlg.rows" :key="r.shotNumber" class="mv-check-line" :class="{ bad: !r.ok }"
@@ -691,8 +747,8 @@
                 <div class="mv-detail-prompt-panel">
                   <div class="mv-detail-section-title">
                     <span>{{ editAsset.kind === 'character' ? '最终提示词 · 三视图' : '最终提示词 · 场景图' }}</span>
-                    <button class="btn btn-sm mv-detail-prompt-gen" @click="genPrompt(editAsset)" :disabled="promptBusy === editAsset.id">
-                      {{ promptBusy === editAsset.id ? '生成中…' : (editAsset.prompt ? '重新生成' : '生成提示词') }}
+                    <button class="btn btn-sm mv-detail-prompt-gen" @click="genPrompt(editAsset)" :disabled="promptBusy.includes(editAsset.id)">
+                      {{ promptBusy.includes(editAsset.id) ? '生成中…' : (editAsset.prompt ? '重新生成' : '生成提示词') }}
                     </button>
                   </div>
                   <textarea v-model="editAsset.prompt" class="mv-detail-prompt-text" rows="6" placeholder="还没生成 —— 先点右上角「生成提示词」"></textarea>
@@ -727,7 +783,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { api, stylePresetAPI, aiConfigAPI } from '~/composables/useApi'
 
 const current = ref(null)
@@ -736,6 +792,16 @@ const assets = ref([])
 const presets = ref([])
 const busy = ref(false)
 const stepMsg = ref('')
+// 忙等进度条（照短剧那把内联进度条的样子）：MV 这条链路后端不给进度数据，
+// 所以用不确定态扫光 + 已用时；短剧那边是按 saved/expected 画真实百分比
+const busySeconds = ref(0)
+let busyTimer = null
+watch(busy, (v) => {
+  if (busyTimer) { clearInterval(busyTimer); busyTimer = null }
+  if (!v) { busySeconds.value = 0; return }
+  busySeconds.value = 0
+  busyTimer = setInterval(() => { busySeconds.value++ }, 1000)
+})
 const showRename = ref(false)
 const renameTitle = ref('')
 const editAsset = ref(null)
@@ -746,7 +812,7 @@ const route = useRoute()
 const projectId = Number(route.params.id)
 const curSeriesId = ref(null)     // 这首 MV 挂在哪个 MV 项目下（建资产/回退用）
 
-const promptBusy = ref(null)
+const promptBusy = ref([])   // 正在生成提示词的资产 id 列表：每张卡各自锁，一张在跑不影响别的卡
 const viewer = ref({ open: false, src: '', title: '' })
 const editRatio = ref('16:9')
 // 顶部三个模型选择器 —— 照短剧 ModelSelect 的口径：选项来自该类全部启用配置，选中值是可选的 'provider/model'
@@ -887,24 +953,17 @@ function fmtDur(sec) {
   return `${m}m${String(t % 60).padStart(2, '0')}s`
 }
 // 任务行运行时间：生成中按提交时刻实时算，完成后用后端记录的用时（照短剧）
-function elapsedLabel(s) {
+function elapsedLabel(s, isRunning) {
   if (s.status === 'processing') {
-    const t0 = Date.parse(String(s.updatedAt || ''))
+    if (!isRunning) return ''            // 排队的不显示运行时间（只有真在跑的才算）
+    // 后端给的 startedAt = 真实开始跑的时刻（排队等的时间不算）；没有才退回 updatedAt
+    const t = videoTasks.value.find((x) => String(x.shotId) === String(s.id) && (x.status === 'processing' || x.status === 'completed'))
+    const t0 = Date.parse(String(t?.startedAt || s.updatedAt || ''))
     const sec = Number.isFinite(t0) ? (Date.now() - t0) / 1000 : 0
     return sec > 1 ? '运行 ' + fmtDur(sec) : '生成中'
   }
   if (s.elapsedSeconds) return '用时 ' + fmtDur(s.elapsedSeconds)
   return ''
-}
-function snapFramesFor(sec) {
-  const n = Math.max(1, Math.round((Number(sec) * 24 - 5) / 17))
-  return 17 * n + 5
-}
-async function setShotDuration(s, sec) {
-  const f = snapFramesFor(sec)
-  if (f / 24 > 15.001) { alert('最长 15 秒（345 帧）'); return }
-  s.frames = f
-  await saveShot(s)
 }
 async function removeHistory(s, url) {
   askConfirm('删除这一版历史视频', '只删这一版（当前版本和所有分段都不动）。继续？', '删除', async () => {
@@ -928,6 +987,12 @@ function toggleExport(id) {
 const maxSeconds = ref(10)
 const storyPrompt = ref('')
 const lyrics = ref('')
+const songTitle = ref('')
+const lyricist = ref('')
+const composer = ref('')
+const lyricLrc = ref('')
+const alignBusy = ref(false)
+const alignMsg = ref('')
 const editStyle = ref('')
 
 /** 画幅（与短剧同一个思路：只有 H3 支持的两种；动态图/封面按它显示） */
@@ -1020,68 +1085,147 @@ function runConfirm() {
   confirmDlg.value = null
   if (typeof fn === 'function') fn()
 }
+/** 批量补齐改成「一段一段来」：每段完成立刻刷新列表，进度条显示该段真实步骤 */
+async function runBatchPrompts(list) {
+  if (!list.length) return
+  busy.value = true
+  promptResult.value = null
+  let ok = 0, fail = 0
+  try {
+    for (let i = 0; i < list.length; i++) {
+      const s = list[i]
+      stepMsg.value = `批量补齐 ${i + 1}/${list.length} · 第 ${s.shotNumber} 段`
+      startPromptPoll(pj.value.id, s.id)
+      const t0 = Date.now()
+      try {
+        const r = await api.post(`/mv/projects/${pj.value.id}/shots/${s.id}/prompt`, {})
+        if (r && (r.prompt || r.promptEn)) {
+          ok++
+          s.prompt = r.prompt
+          s.promptEn = r.promptEn || s.promptEn || ''
+          promptResult.value = { ok: true, text: `✓ 第 ${s.shotNumber} 段已生成（${i + 1}/${list.length}）· ${((Date.now() - t0) / 1000).toFixed(1)}s` }
+        } else { fail++; promptResult.value = { ok: false, text: `✗ 第 ${s.shotNumber} 段失败：后端没返回内容（${i + 1}/${list.length}）` } }
+      } catch (e) {
+        fail++
+        promptResult.value = { ok: false, text: `✗ 第 ${s.shotNumber} 段失败：${String(e?.message || e)}（${i + 1}/${list.length}）` }
+      } finally {
+        stopPromptPoll()
+        promptStep.value = null
+        await refresh()
+      }
+    }
+  } finally {
+    busy.value = false
+    stepMsg.value = ''
+    promptResult.value = fail
+      ? { ok: false, text: `批量补齐结束：成功 ${ok} 段 / 失败 ${fail} 段` }
+      : { ok: true, text: `✓ 批量补齐完成 · 共 ${ok} 段（逐段已刷新）` }
+  }
+}
+
+const rewriteAll = ref(false)   // 勾上＝全部重写（含已生成），不勾＝只补空缺
 const askGenPrompts = () => {
   // 勾了段就只补勾选的（多选时不再全库扫）
   const picked = selectedIds.value.length ? shots.value.filter((x) => selectedIds.value.includes(x.id)) : []
+  // 全部重写：不管有没有提示词，按当前人物/场景/分镜重跑一遍（不然必须先手动删掉旧的）
+  if (rewriteAll.value) {
+    const list = picked.length ? picked : shots.value
+    if (!list.length) return
+    return askConfirm('全部重写提示词',
+      `会把 ${list.length} 段的提示词按当前的人物/场景/分镜**全部重跑一遍**（会覆盖已有内容，每段约 1~2 分钟）。继续？`, '开始重写',
+      async () => {
+        await runBatchPrompts(list)
+        selectedIds.value = []
+      })
+  }
   if (picked.length) {
     const miss = picked.filter((x) => !String(x.promptEn || '').trim()).length
     return askConfirm('批量补齐提示词',
       `只给勾选的 ${picked.length} 段补齐（其中 ${miss} 段还没有提示词；已有提示词的不动）。继续？`, '开始补齐',
       async () => {
-        const r = await call(() => api.post(`/mv/projects/${pj.value.id}/prompts`, { missing_only: true, shot_ids: picked.map((x) => x.id) }), '正在补齐提示词…')
-        if (r) { await refresh(); selectedIds.value = [] }
+        await runBatchPrompts(picked)
+        selectedIds.value = []
       })
   }
   const miss = shots.value.filter((x) => !String(x.promptEn || '').trim()).length
   const have = shots.value.length - miss
-  if (!miss) { alert(`每一段都已有提示词（${have} 段），没有需要补齐的。\n要重写某一段，请点那一段的「重新生成」。`); return }
+  if (!miss) { alert(`每一段都已有提示词（${have} 段），没有需要补齐的。\n要重写请勾上「全部重写」，或点某一段的「重新生成」。`); return }
   askConfirm('批量补齐提示词',
     `只给还没有提示词的 ${miss} 段生成（已有 ${have} 段不动）。继续？`, '开始补齐',
     async () => {
-      const r = await call(() => api.post(`/mv/projects/${pj.value.id}/prompts`, { missing_only: true }), '正在补齐提示词…')
-      if (r) await refresh()
+      await runBatchPrompts(shots.value.filter((x) => !String(x.promptEn || '').trim()))
     })
 }
 
 const checking = ref(false)
 const shotPromptBusy = ref(null)
+const promptStep = ref(null)      // { step, total, label } —— 后端真实步骤，不是假动画
+const promptResult = ref(null)    // { ok, text } —— 生成结束后**留在界面上**看，不再一闪就没
+let promptPoll = null
+function startPromptPoll(pid, sid) {
+  stopPromptPoll()
+  const tick = async () => {
+    try {
+      const r = await api.get(`/mv/projects/${pid}/shots/${sid}/prompt-progress`)
+      if (r && Number(r.total) > 0 && Number(r.step) > 0) promptStep.value = { step: Number(r.step), total: Number(r.total), label: String(r.label || '') }
+    } catch { /* 轮询失败不打扰 */ }
+  }
+  tick()
+  promptPoll = setInterval(tick, 700)
+}
+function stopPromptPoll() { if (promptPoll) { clearInterval(promptPoll); promptPoll = null } }
 const showEn = ref(false)
 const checkingShot = ref(null)
 const checkDlg = ref(null)   // 体检结果弹窗
+const fixing = ref(false)    // 「一键修复」正在进行
 async function genShotPrompt(s) {
   if (!s) return
   showEn.value = false
   if (!need(!!pj.value.vocalStem, '先做人声分离')) return
   shotPromptBusy.value = s.id
+  promptStep.value = null
+  promptResult.value = null
+  busy.value = true
+  stepMsg.value = '正在生成这一段提示词…'
+  startPromptPoll(pj.value.id, s.id)
+  const t0 = Date.now()
 
   try {
-    const r = await call(() => api.post(`/mv/projects/${pj.value.id}/shots/${s.id}/prompt`, {}), '正在生成这一段的提示词…')
+    const r = await api.post(`/mv/projects/${pj.value.id}/shots/${s.id}/prompt`, {})
     if (r) {
       // 后端同时返回中英两份 —— 原来只取了中文，导致「显示英文提示词」按钮不出现
       s.prompt = r.prompt
       s.promptEn = r.promptEn || s.promptEn || ''
       await refresh()          // 从库里同步一次，中英两份都到位
       showEn.value = false
+      promptResult.value = { ok: true, text: `✓ 第 ${s.shotNumber} 段提示词已生成 · 中文 ${String(r.prompt || '').length} 字 / 英文 ${String(r.promptEn || '').length} 字符 · 用时 ${((Date.now() - t0) / 1000).toFixed(1)}s` }
+    } else {
+      promptResult.value = { ok: false, text: `✗ 第 ${s.shotNumber} 段生成失败：后端没有返回内容` }
     }
-  } finally { shotPromptBusy.value = null }
+  } catch (e) {
+    promptResult.value = { ok: false, text: `✗ 第 ${s.shotNumber} 段生成失败：${String(e?.message || e)}` }
+  } finally {
+    stopPromptPoll()
+    shotPromptBusy.value = null
+    promptStep.value = null
+    busy.value = false
+    stepMsg.value = ''
+  }
 }
+/** 单段体检：直接检（不再弹确认窗），结果直接出结果弹窗 */
 async function checkShot(s) {
   if (!s) return
   if (!s.prompt && !s.promptEn) { alert('这一段还没有分镜稿'); return }
-  askConfirm(`体检 · 分镜${String(s.shotNumber).padStart(2, '0')}`,
-    '会检查这一段的结构（六段式是否齐、顺序、危险词、唱段嘴部约束）。不改数据。继续？', '开始体检',
-    async () => {
-      checkingShot.value = s.id
-      try {
-        const r = await api.post(`/mv/projects/${pj.value.id}/shots/${s.id}/check`, {})
-          .catch((e) => { alert('体检失败：' + String(e?.message || e)); return null })
-        if (r) checkDlg.value = {
-          title: `体检 · 分镜 ${String(r.shotNumber).padStart(2, '0')}`,
-          ok: r.ok ? 1 : 0, bad: r.ok ? 0 : 1,
-          rows: [{ shotNumber: r.shotNumber, ok: !!r.ok, problems: r.problems || [] }],
-        }
-      } finally { checkingShot.value = null }
-    })
+  checkingShot.value = s.id
+  try {
+    const r = await api.post(`/mv/projects/${pj.value.id}/shots/${s.id}/check`, {})
+      .catch((e) => { alert('体检失败：' + String(e?.message || e)); return null })
+    if (r) checkDlg.value = {
+      title: `体检 · 分镜 ${String(r.shotNumber).padStart(2, '0')}`,
+      ok: r.ok ? 1 : 0, bad: r.ok ? 0 : 1,
+      rows: [{ shotNumber: r.shotNumber, ok: !!r.ok, problems: r.problems || [] }],
+    }
+  } finally { checkingShot.value = null }
 }
 async function doCheckAll() {
   checking.value = true
@@ -1091,9 +1235,32 @@ async function doCheckAll() {
     if (r) checkDlg.value = { title: '全部体检结果', ok: r.ok || 0, bad: r.bad || 0, rows: r.rows || [] }
   } finally { checking.value = false }
 }
-const askCheckAll = () => askConfirm('全部体检',
-  `会把 ${shots.value.length} 段逐条检查结构，返回问题清单（不改数据）。继续？`, '开始体检', doCheckAll)
+/** 一键修复：把体检没过的段落逐个重新生成提示词，跑完自动再体检一遍 */
+async function fixChecked() {
+  const bad = (checkDlg.value?.rows || []).filter((r) => !r.ok)
+  const list = bad
+    .map((r) => shots.value.find((s) => Number(s.shotNumber) === Number(r.shotNumber)))
+    .filter(Boolean)
+  if (!list.length) { alert('这些段在分镜表里找不到了，刷新一下再试'); return }
+  fixing.value = true
+  let ok = 0, fail = 0
+  try {
+    for (let i = 0; i < list.length; i++) {
+      const s = list[i]
+      stepMsg.value = `修复 ${i + 1}/${list.length} · 第 ${s.shotNumber} 段`
+      try { await genShotPrompt(s); ok++ } catch { fail++ }
+    }
+  } finally {
+    fixing.value = false
+    stepMsg.value = ''
+  }
+  await doCheckAll()
+  promptResult.value = { ok: true, text: `✓ 一键修复完成 · 重写 ${ok} 段${fail ? ` · 失败 ${fail} 段` : ''}` }
+}
+/** 全部体检：直接检（不再弹确认窗） */
+const askCheckAll = () => doCheckAll()
 const separating = ref(false)
+const askSeparate = () => separateVocals()   // 模板里用的是 askSeparate，必须有这个别名（之前漏了，顶栏按钮点了没反应）
 async function separateVocals() {
   if (!current.value) return
   separating.value = true
@@ -1161,15 +1328,22 @@ const VOCAL_OPTS = [{ label: '唱', value: 'vocal_active' }, { label: '非唱', 
 const SIZE_OPTS = [{ label: '中远景', value: '中远景' }, { label: '中景', value: '中景' }, { label: '近景', value: '近景' }, { label: '特写', value: '特写' }]
 const taskRows = computed(() => {
   void nowTick.value   // 依赖心跳 → 运行中的时间每 2 秒重算
+  // GPU 串行：同一时刻只有一个段真在跑 —— 提交最早的那条算「运行中」，其余算「排队」
+  const running = shots.value.filter((s) => s.status === 'processing')
+  const runningId = running.length
+    ? running.reduce((a, b) => (Number(a.taskId || 0) <= Number(b.taskId || 0) ? a : b)).id
+    : null
   return shots.value
     .filter((s) => s.status === 'processing' || s.videoUrl || s.status === 'failed' || s.taskId)
     .map((s) => ({
       id: s.id, shotNumber: s.shotNumber, kind: '视频',
       title: outlineTextOf(s) || (s.vocalState === 'vocal_active' ? '唱段' : '间奏'),
-      state: shotState(s), label: shotStateLabel(s),
+      state: shotState(s),
+      running: s.id === runningId,
+      label: s.status === 'processing' ? (s.id === runningId ? '生成中' : '排队中') : shotStateLabel(s),
       duration: shotSeconds(s) ? shotSeconds(s).toFixed(3) + 's' : '—',
       videoUrl: s.videoUrl, errorMsg: s.errorMsg,
-      elapsed: elapsedLabel(s),
+      elapsed: elapsedLabel(s, s.id === runningId),
     }))
 })
 const recentDone = computed(() => shots.value
@@ -1184,6 +1358,55 @@ const recentDone = computed(() => shots.value
     error: x.status === 'failed' ? (x.errorMsg || '失败') : '',
   })))
 const activeTaskCount = computed(() => videoStats.value.pending + videoStats.value.failed)
+// 本地草稿：轮询（6s 一次）拿回的旧 pj 不能把用户刚改的字顶掉
+const outlineDraft = ref({})
+const draftOf = (o) => {
+  const k = `${Number(o.start)}-${Number(o.end)}`
+  return outlineDraft.value[k] ?? o.what ?? ''
+}
+const setDraft = (o, text) => {
+  const k = `${Number(o.start)}-${Number(o.end)}`
+  outlineDraft.value = { ...outlineDraft.value, [k]: text }
+}
+const shotDraft = ref({})
+const draftOfShot = (s) => (s && shotDraft.value[s.id] !== undefined ? shotDraft.value[s.id] : outlineTextOf(s))
+const setDraftOfShot = (s, text) => {
+  if (s) shotDraft.value = { ...shotDraft.value, [s.id]: text }
+}
+
+function resizeCell(el) {
+  if (!el) return
+  el.style.height = 'auto'
+  el.style.height = `${el.scrollHeight}px`
+}
+
+async function saveOutlineEntry(o, text) {
+  if (!o) return
+  if (String(o.what || '') === String(text || '')) return
+  try {
+    const r = await api.post(`/mv/projects/${pj.value.id}/outline`, { start: Number(o.start), end: Number(o.end), what: String(text || '') })
+    if (r?.outline) {
+      pj.value = { ...pj.value, outline: JSON.stringify(r.outline) }
+    }
+    promptResult.value = { ok: true, text: `✓ ${Number(o.start).toFixed(1)}–${Number(o.end).toFixed(1)}s 画面已保存` }
+  } catch (e) {
+    promptResult.value = { ok: false, text: `✗ 画面保存失败：${String(e?.message || e)}` }
+  }
+}
+
+async function saveOutline(s, text) {
+  if (!s) return
+  const before = outlineTextOf(s)
+  if (String(before) === String(text)) return
+  try {
+    const r = await api.post(`/mv/projects/${pj.value.id}/outline`, { start: Number(s.startSeconds), end: Number(s.endSeconds), what: String(text || '') })
+    if (r?.outline) pj.value = { ...pj.value, outline: JSON.stringify(r.outline) }
+    promptResult.value = { ok: true, text: `✓ 第 ${s.shotNumber} 段画面稿已保存` }
+  } catch (e) {
+    promptResult.value = { ok: false, text: `✗ 画面稿保存失败：${String(e?.message || e)}` }
+  }
+}
+
 const outlineTextOf = (s) => {
   const list = outline.value
   if (!list.length) return ''
@@ -1273,6 +1496,10 @@ function sync(r) {
   assets.value = r.assets || []
   storyPrompt.value = r.project.storyPrompt || ''
   lyrics.value = r.project.lyrics || ''
+  songTitle.value = r.project.songTitle || ''
+  lyricist.value = r.project.lyricist || ''
+  composer.value = r.project.composer || ''
+  lyricLrc.value = r.project.lyricLrc || ''
   editStyle.value = r.project.style || ''
   editRatio.value = r.project.aspectRatio || '16:9'
   maxSeconds.value = Number(r.project.maxShotSeconds || 10)
@@ -1285,7 +1512,8 @@ function back() {
 }
 
 async function refresh() {
-  const r = await call(() => api.get(`/mv/projects/${pj.value.id}`))
+  // 不能用 call()：它是"全局忙"包装，finally 会把 busy 清掉 → 外层循环的进度条中途消失（实测批量补齐/单段生成）
+  const r = await api.get(`/mv/projects/${pj.value.id}`).catch(() => null)
   if (r) { current.value = r; sync(r) }
 }
 
@@ -1309,6 +1537,53 @@ async function saveAll() {
     current.value = { ...current.value, project: r.project }
     stepMsg.value = '已保存'
     setTimeout(() => { if (stepMsg.value === '已保存') stepMsg.value = '' }, 1200)
+  }
+}
+
+/** 主创三项：失焦即存（合成时读库里的值烧片头） */
+/** 这条成片是不是已经超分过（后端打 upscaled 标记；老数据看文件名 mv_1080_） */
+function isUpscaled(m) {
+  let marked = false
+  try { marked = JSON.parse(m?.shotIds || '[]').includes('upscaled') } catch { marked = false }
+  return marked || /mv_1080_/.test(String(m?.mergedUrl || ''))
+}
+
+/** 超分到 1080p（草稿：成片高度不够就放大，落成新的一条成片记录） */
+async function upscaleMerge(m) {
+  const r = await call(() => api.post(`/mv/projects/${pj.value.id}/upscale`, { url: m.mergedUrl }), '正在超分到 1080p…')
+  if (r?.output_url) {
+    await refresh()
+    exportPreview.value = { url: r.output_url, title: '1080p 成片' }
+    stepMsg.value = '已超分到 1080p'
+    setTimeout(() => { if (stepMsg.value === '已超分到 1080p') stepMsg.value = '' }, 2000)
+  }
+}
+
+async function saveCredits() {
+  const r = await api.post(`/mv/projects/${pj.value.id}/credits`, {
+    song_title: songTitle.value, lyricist: lyricist.value, composer: composer.value,
+  }).catch(() => null)
+  if (r?.project) current.value = { ...current.value, project: r.project }
+}
+
+/** 自动对轴：纯歌词 + 人声轨 → 逐句时间轴（4080 上跑 Whisper） */
+async function alignLyrics() {
+  if (!lyrics.value.trim() || alignBusy.value) return
+  alignBusy.value = true
+  alignMsg.value = '正在用人声轨对轴（约 20 秒）…'
+  try {
+    // 不走 call()：它的 finally 会立刻清掉 stepMsg，对轴一进缓存（0 秒）就什么都看不到
+    const r = await api.post(`/mv/projects/${pj.value.id}/align`, {})
+    if (r?.lrc) {
+      lyricLrc.value = r.lrc
+      alignMsg.value = `已对轴 · ${r.lines} 句` + (r.unmatched ? `（${r.unmatched} 句按邻句插值）` : '') + (r.cached ? ' · 缓存' : '')
+    } else {
+      alignMsg.value = '对轴没有返回时间轴'
+    }
+  } catch (err) {
+    alignMsg.value = '对轴失败：' + String(err?.message || err)
+  } finally {
+    alignBusy.value = false
   }
 }
 
@@ -1353,8 +1628,8 @@ async function saveAssetFull() {
 /** 生成提示词：把资产描述写成一段能直接出图的提示词（在这之前不许出图） */
 async function genPrompt(a) {
   if (!need(!!String(a.description || a.appearance || a.styling || '').trim(), '这个资产还没有描述 —— 先写清外貌/场景，再生成提示词')) return
-  if (promptBusy.value === a.id) return
-  promptBusy.value = a.id
+  if (promptBusy.value.includes(a.id)) return
+  promptBusy.value = [...promptBusy.value, a.id]
   try {
     const r = await api.post(`/mv/projects/${pj.value.id}/assets/${a.id}/prompt`, {
       name: a.name, description: a.description, appearance: a.appearance, styling: a.styling,
@@ -1367,23 +1642,44 @@ async function genPrompt(a) {
   } catch (err) {
     alert(String(err?.message || err))
   } finally {
-    promptBusy.value = null
+    promptBusy.value = promptBusy.value.filter((x) => x !== a.id)
   }
 }
 
+// 提取到同名资产时待定的选择（素材库已有同名角色/场景）
+const dupConflicts = ref([])
 async function extract() {
   if (!guardStep(3)) return
   const r = await call(() => api.post(`/mv/projects/${pj.value.id}/extract`, { story_prompt: storyPrompt.value }),
     'LLM 正在提取人物和场景…')
   if (r) {
     assets.value = r.assets || []
+    dupConflicts.value = r.conflicts || []
     await refresh()
+  }
+}
+function keepExtracted(c) {
+  dupConflicts.value = dupConflicts.value.filter((x) => x.assetId !== c.assetId)
+}
+async function useLibrary(c) {
+  const r = await call(() => api.post(`/mv/projects/${pj.value.id}/assets/${c.assetId}/use-library`, { libraryId: c.libraryId }),
+    '正在套用素材库里的形象…')
+  if (r) {
+    assets.value = r.assets || assets.value
+    keepExtracted(c)
   }
 }
 
 // 删人物/场景卡之前先弹窗确认（误点一次就没了）
 function askRemoveAsset(a) {
   const kind = a.kind === 'character' ? '人物' : '场景'
+  // 素材库(scope='library')的条目只从这首 MV 取消卡片，库里的原图和描述不动
+  if (a.scope === 'library') {
+    askConfirm(`从这首 MV 移除${kind}卡`,
+      `「${a.name || '未命名'}」是素材库里的资产：这里只会把它从这首 MV 的资产制作里移除，素材库中的原图和描述**保留**，其他 MV 照常能用。`,
+      '从本项目移除', () => removeAsset(a))
+    return
+  }
   askConfirm(`删除${kind}卡`,
     `确定删除「${a.name || '未命名'}」？已生成的图、已抽的身份卡和它上面的提示词都会一起删掉，这一步不能撤销。`,
     '确定删除', () => removeAsset(a))
@@ -1452,6 +1748,15 @@ async function genPrompts() {
   if (!need(shots.value.length, '先点「切分详细分镜」，再来编译提示词')) return
   const r = await call(() => api.post(`/mv/projects/${pj.value.id}/prompts`, {}), '正在编译六段式提示词…')
   if (r) await refresh()
+  promptResult.value = r
+    ? { ok: true, text: `✓ 提示词编译完成 · ${Number(r.done) || 0} 段（跳过 ${Number(r.skipped) || 0} 段）` }
+    : { ok: false, text: '✗ 编译失败：后端没有返回结果' }
+}
+
+let extraTimer = null
+function saveExtraDebounced(s) {
+  if (extraTimer) clearTimeout(extraTimer)
+  extraTimer = setTimeout(() => { saveShot(s) }, 700)
 }
 
 async function saveShot(s) {
@@ -1466,6 +1771,25 @@ async function render(s) {
   if (!need(!!s.prompt, `第 ${s.shotNumber} 段还没有提示词 —— 先点「编译提示词」`)) return
   const r = await call(() => api.post(`/mv/projects/${pj.value.id}/shots/${s.id}/render`, {}))
   if (r) { s.status = 'processing'; syncTimer() }
+}
+
+/** 停止某一段：排队中的直接作废，正在跑的也会在下一轮轮询收尾（不删已生成的成片） */
+async function stopShot(s) {
+  if (!s) return
+  // 已经在 GPU 上跑的那条停不掉（4080 会跑完），只有还在排队的能真作废 —— 先把代价说清楚再动手
+  const running = !!taskRows.value.find((r) => r.id === s.id)?.running   // 排队中(false) 还是已在 GPU 上出片(true)
+  askConfirm('停止生成',
+    running
+      ? `第 ${s.shotNumber} 段已经在出片了：这里只能让它从本段撤下来（不再等结果），4080 上那一条仍会跑完、不会自动入库。已生成的旧片不受影响。继续？`
+      : `停止第 ${s.shotNumber} 段的排队（还没开始跑，可省掉这一条）。已生成的旧片不受影响。继续？`,
+    '停止', () => doStopShot(s))
+}
+async function doStopShot(s) {
+  const r = await call(() => api.post(`/mv/projects/${pj.value.id}/shots/${s.id}/cancel`, {}), '正在停止…')
+  if (r) {
+    await refresh()
+    promptResult.value = { ok: true, text: `■ 第 ${s.shotNumber} 段已停止${Number(r.canceled_tasks) ? `（作废 ${Number(r.canceled_tasks)} 个排队任务）` : ''}` }
+  }
 }
 
 async function renderAll() {
@@ -1508,6 +1832,47 @@ function syncTimer() {
   if (!needPoll && timer) { clearInterval(timer); timer = null }
 }
 
+// 模型选择器在顶部导航里：把本项目的选项 + 当前值塞进共享状态，导航层只负责显示
+const headerModels = useHeaderModels()
+watchEffect(() => {
+  headerModels.value = {
+    options: { text: textModelOptions.value, image: imageModelOptions.value, video: videoModelOptions.value },
+    value: { text: mvTextModel.value, image: mvImageModel.value, video: mvVideoModel.value },
+    defaultLabel: {
+      text: '默认（' + (textModelOptions.value[0]?.model || '未配') + '）',
+      image: '默认（' + (imageModelOptions.value[0]?.model || '未配') + '）',
+      video: '默认（' + (videoModelOptions.value[0]?.model || '未配') + '）',
+    },
+    multi: {
+      text: hasMultiConfigs(textModelOptions.value),
+      image: hasMultiConfigs(imageModelOptions.value),
+      video: hasMultiConfigs(videoModelOptions.value),
+    },
+    set: (kind, v) => {
+      if (kind === 'text') mvTextModel.value = v
+      else if (kind === 'image') mvImageModel.value = v
+      else mvVideoModel.value = v
+    },
+  }
+})
+onBeforeUnmount(() => { headerModels.value = null })
+
+/**
+ * 人声分离前移到「上传歌之后」：进页面就自动跑（幂等，已分离直接返回缓存）。
+ * 只在**还没有分镜**时自动跑 —— 重新分离会清空已有分镜（唱/非唱判据失效），不能偷偷动。
+ */
+async function autoSeparate() {
+  if (separating.value || pj.value.vocalStem || !pj.value.songFile || shots.value.length) return
+  separating.value = true
+  try {
+    const r = await api.post(`/mv/projects/${pj.value.id}/separate`, {})
+    if (r) await refresh()
+  } catch { /* 失败就留在「未分离」，用户可以手动点按钮 */ } finally {
+    separating.value = false
+  }
+}
+onMounted(autoSeparate)
+
 onMounted(async () => {
   await loadPresets()
   await loadConfigs()
@@ -1533,10 +1898,14 @@ onUnmounted(() => { if (timer) clearInterval(timer) })
   padding: 10px 16px;
   border-radius: var(--radius-lg);
   margin-bottom: 14px;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
+  height: 56px;
+  box-sizing: border-box;
+  overflow: hidden;
 }
-.head-info { flex: 1; min-width: 0; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-.head-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+.head-info { flex: 1; min-width: 0; display: flex; align-items: center; gap: 10px; flex-wrap: nowrap; overflow: hidden; }
+.head-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; min-height: 32px; }
+.head-actions { flex-wrap: nowrap; }
 .title-edit-btn { flex: 0 0 auto; color: var(--text-3); }
 .title-edit-btn:hover { color: var(--accent); background: var(--accent-bg); }
 .back-btn {
@@ -1554,9 +1923,17 @@ onUnmounted(() => { if (timer) clearInterval(timer) })
   letter-spacing: -0.02em;
   line-height: 1.2;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  /* 挤的时候先压缩标题（省略号），别去压状态/风格标签 —— 标签一被压就一个字一行，再被 56px 高度裁掉 */
+  flex: 0 1 auto; min-width: 56px; max-width: 42vw;
 }
-.page-meta { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
-.meta-item { display: flex; align-items: center; gap: 5px; font-size: 12px; color: var(--text-2); }
+/* 窗口变窄时先丢次要信息，标题和按钮永不被挤没 */
+@media (max-width: 1080px) { .page-meta { display: none; } }
+@media (max-width: 900px) { .head-info .tag { display: none; } }
+.page-meta { display: flex; align-items: center; gap: 14px; flex-wrap: nowrap; flex-shrink: 0; }
+.meta-item { display: flex; align-items: center; gap: 5px; font-size: 12px; color: var(--text-2); white-space: nowrap; }
+/* 头部里的状态/风格标签不许被挤成竖排（挤了就会一个字一行、再被 56px 高度裁掉） */
+.head-info > .tag { white-space: nowrap; flex: 0 0 auto; }
+.mv-top-selects .mv-sel { white-space: nowrap; }
 
 /* 左侧流程导航 + 右侧内容（照短剧 episode/detail 的左导航布局） */
 .mv-layout { flex: 1; min-height: 0; display: flex; gap: 16px; align-items: stretch; }
@@ -1593,8 +1970,7 @@ onUnmounted(() => { if (timer) clearInterval(timer) })
 .mv-main { flex: 1; min-width: 0; min-height: 0; overflow-y: auto; }
 
 /* 顶部标签栏（照短剧：模型选择器一排） */
-.head-actions { flex-wrap: wrap; margin-left: auto; justify-content: flex-end; }
-.mv-step-hint { font-size: 10.5px; font-weight: 800; color: var(--text-3); align-self: center; }
+.head-actions { flex-wrap: nowrap; margin-left: auto; justify-content: flex-end; }
 .btn.is-on { border-color: var(--accent); color: var(--accent-text, var(--accent)); background: rgba(120,140,255,.14); }
 .mv-top-selects { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; flex-shrink: 0; }
 .mv-sel {
@@ -1698,6 +2074,8 @@ onUnmounted(() => { if (timer) clearInterval(timer) })
 .mv-block-title { font-weight: 700; font-size: 13px; margin-bottom: 10px; }
 .mv-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
 .mv-row-end { justify-content: flex-end; margin-top: 10px; }
+.mv-credits-row { flex-wrap: wrap; gap: 8px; margin: 8px 0 14px; }
+.mv-credit { width: 150px; flex: 0 0 auto; }
 .mv-label { display: block; font-size: 12px; color: var(--text-2); margin: 8px 0 4px; }
 .mv-num { width: 88px; }
 .mv-hint { font-size: 12px; color: var(--text-3); padding: 6px 0; }
@@ -1761,7 +2139,10 @@ onUnmounted(() => { if (timer) clearInterval(timer) })
 }
 .mv-final-label { color: var(--text-3); margin-right: 4px; }
 
-.mv-outline { margin: 6px 0 0; padding-left: 20px; font-size: 12.5px; line-height: 1.8; }
+.mv-outline { margin: 10px 0 0; padding-left: 0; list-style: none; font-size: 14px; line-height: 1.7; }
+.mv-outline > li { display: flex; align-items: flex-start; gap: 10px; padding: 8px 10px; border-bottom: 1px solid var(--border); }
+.mv-outline > li:last-child { border-bottom: 0; }
+.mv-outline > li .meta-item { flex: none; width: 92px; padding-top: 5px; font-variant-numeric: tabular-nums; opacity: .75; }
 .mv-table { width: 100%; border-collapse: collapse; font-size: 12px; }
 .mv-table th { text-align: left; color: var(--text-3); font-weight: 600; padding: 6px; border-bottom: 1px solid var(--border); }
 .mv-table td { padding: 5px 6px; border-bottom: 1px solid var(--border); vertical-align: middle; }
@@ -1772,6 +2153,19 @@ onUnmounted(() => { if (timer) clearInterval(timer) })
 .bad { color: var(--action-danger); }
 .dim { color: var(--text-3); }
 .busy-hint { font-size: 12px; color: var(--accent-text); }
+/* 忙等内联进度条（照短剧 pb-inline 的样子）：MV 后端不给进度 ⇒ 扫光 + 已用时 */
+.pb-inline { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--accent-text); max-width: 360px; }
+.pb-inline-result { flex: none; width: 320px; max-width: 320px; overflow: hidden; }
+.pb-inline-result .pb-text { flex: 1; min-width: 0; }
+.pb-bar { display: block; flex: none; width: 120px; height: 5px; border-radius: 3px; background: var(--border); overflow: hidden; position: relative; }
+.pb-bar-fill { position: absolute; top: 0; bottom: 0; left: 0; border-radius: 3px; background: var(--accent); transition: width .25s var(--ease-out); }
+.mv-result-close { flex: none; border: 0; background: transparent; color: inherit; cursor: pointer; font-size: 14px; line-height: 1; padding: 0 2px; opacity: .7; }
+.mv-result-close:hover { opacity: 1; }
+.pb-result.ok .pb-text { color: var(--text-2); }
+.pb-result.bad .pb-text { color: #e5484d; }
+.pb-bar-run { position: absolute; top: 0; bottom: 0; width: 40%; border-radius: 3px; background: var(--accent); animation: pb-sweep 1.2s var(--ease-out) infinite; }
+.pb-text { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+@keyframes pb-sweep { 0% { left: -40%; } 100% { left: 100%; } }
 .mv-video { width: 100%; max-width: 420px; border-radius: var(--radius-lg); margin-top: 6px; }
 .mv-prompt {
   white-space: pre-wrap; font-family: var(--font-mono, monospace);
@@ -1998,6 +2392,11 @@ button.video-task-metric.on { box-shadow: 0 0 0 2px var(--accent); color: var(--
 .mv-field { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
 .mv-field > span { font-size: 10.5px; color: var(--text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .video-inspector-fields .input { width: 100%; min-width: 0; height: 30px; font-size: 11.5px; }
+.mv-outline-cell { flex: 1; min-width: 0; box-sizing: border-box; resize: vertical; field-sizing: content; font-family: inherit; font-size: 14px; line-height: 1.7; padding: 4px 8px; border: 1px solid transparent; border-radius: 4px; background: transparent; color: inherit; }
+.mv-outline-edit { field-sizing: content; font-size: 13.5px; }
+.mv-outline-cell:hover { border-color: var(--border); }
+.mv-outline-cell:focus { border-color: var(--accent); background: var(--bg-2); outline: none; }
+.mv-outline-edit { width: 100%; box-sizing: border-box; resize: vertical; font-family: inherit; }
 .mv-outline-pre { margin: 0; padding: 8px 10px; max-height: 120px; overflow: auto; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-2); color: var(--text-2); font-size: 11.5px; line-height: 1.55; white-space: pre-wrap; }
 .storyboard-ref-list.is-embedded { max-height: 320px; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; }
 .storyboard-ref-item { display: grid; grid-template-columns: 56px minmax(0, 1fr); gap: 8px; align-items: center; padding: 6px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-2); }
@@ -2010,8 +2409,8 @@ button.video-task-metric.on { box-shadow: 0 0 0 2px var(--accent); color: var(--
 .storyboard-ref-state { font-size: 10.5px; font-weight: 700; color: var(--text-3); }
 .storyboard-ref-state.is-ready { color: #3fb950; }
 .storyboard-ref-empty { padding: 16px 8px; text-align: center; font-size: 11.5px; color: var(--text-3); }
-.video-task-player { min-width: 0; min-height: 0; display: flex; flex-direction: column; border-left: 1px solid var(--border); background: var(--bg-1); overflow: hidden; }
-.video-player-scroll { flex: 1; min-height: 0; overflow-y: auto; }
+.video-task-player { position: relative; min-width: 0; min-height: 0; display: flex; flex-direction: column; border-left: 1px solid var(--border); background: var(--bg-1); overflow: hidden; }
+.video-player-scroll { flex: 1; min-height: 0; overflow-y: auto; padding-bottom: 56px; }
 .video-player-head { min-height: 44px; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 6px 12px; padding: 8px 14px; border-bottom: 1px solid var(--border); }
 .video-player-head-info { min-width: 0; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .video-player-title { color: var(--text-0); font-size: 13px; font-weight: 700; white-space: nowrap; }
@@ -2067,12 +2466,15 @@ button.video-task-metric.on { box-shadow: 0 0 0 2px var(--accent); color: var(--
 .mv-side-progress-seg { flex: 1; height: 6px; padding: 0; border: 0; border-radius: 3px; background: var(--bg-2); overflow: hidden; cursor: pointer; }
 .mv-side-progress-seg-fill { display: block; height: 100%; width: 0; background: var(--accent); transition: width .3s ease; }
 .mv-side-progress-seg.done .mv-side-progress-seg-fill { background: #34c759; }
+.mv-side-progress + .mv-side-foot { margin-top: 8px; }   /* 有进度块时按钮紧贴它，不再拉到底部分开 */
 .mv-side-progress-labels { display: flex; gap: 3px; }
 .mv-side-progress-label { flex: 1; font-size: 10px; color: var(--text-2); text-align: center; font-variant-numeric: tabular-nums; }
 .mv-side-progress-label.on { color: #34c759; font-weight: 600; }
 
 /* 左侧栏底部「刷新数据」：铺满宽度（照短剧左侧栏底部） */
-.mv-side-foot { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--border); }
+.video-task-action.is-stop { color: #ff453a; border-color: #ff453a55; }
+/* 进度块负责把底部推下去；它紧贴刷新按钮（两者之间只留 8px） */
+.mv-side-foot { margin-top: auto; padding-top: 8px; border-top: 1px solid var(--border); }
 .mv-side-refresh { display: flex; align-items: center; justify-content: center; gap: 6px; width: 100%;
   padding: 8px 10px; font-size: 12px; font-weight: 600; cursor: pointer; font-family: inherit;
   border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg-2); color: var(--text-2);
@@ -2104,19 +2506,23 @@ button.video-task-metric.on { box-shadow: 0 0 0 2px var(--accent); color: var(--
 .video-history-card video { width: 100%; height: 100%; object-fit: cover; display: block; }
 .video-history-idx { position: absolute; left: 3px; bottom: 2px; font-size: 9.5px; color: #fff; text-shadow: 0 1px 3px #000; }
 /* 右栏底部固定操作条 */
-.video-player-foot { flex: 0 0 auto; padding: 10px 14px; border-top: 1px solid var(--border); background: var(--bg-1); }
-.video-player-foot .btn { width: 100%; }
+.video-player-foot { position: absolute; right: 12px; bottom: 12px; z-index: 3; display: flex; align-items: center; gap: 8px;
+  padding: 6px 8px; border: 1px solid var(--border); border-radius: 8px; background: color-mix(in srgb, var(--bg-1) 94%, transparent); backdrop-filter: blur(6px); }
+.video-player-foot .btn { width: auto; }
 
 /* 导出页（照短剧导出：成片条 + 素材网格 + 播放弹窗） */
 .export-section-head { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
 .export-section-title { font-size: 13px; font-weight: 700; color: var(--text-0); }
 .export-merge-strip { display: flex; gap: 12px; overflow-x: auto; padding-bottom: 4px; }
-.merge-card { flex: 0 0 auto; width: 220px; border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; background: var(--bg-2); }
+.merge-card { flex: 0 0 auto; width: 268px; border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; background: var(--bg-2); }
 .merge-card.playable { cursor: pointer; }
 .merge-card-thumb { position: relative; aspect-ratio: 16/9; background: #000; }
 .merge-card-thumb video { width: 100%; height: 100%; object-fit: cover; display: block; }
 .merge-card-play { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: #fff; opacity: .85; text-shadow: 0 2px 8px #000; pointer-events: none; }
-.merge-card-meta { display: flex; align-items: center; gap: 6px; padding: 6px 8px; font-size: 11px; }
+.merge-card-meta { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; padding: 6px 8px; font-size: 11px; }
+/* 标题独占一行（省略号），三个按钮另起一行，免得挤成一条 */
+.merge-card-meta > .mono { flex: 1 1 100%; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-2); }
+.merge-card-meta .btn { flex: 0 0 auto; padding: 2px 8px; font-size: 11px; }
 .export-merge-empty { padding: 16px; text-align: center; color: var(--text-3); font-size: 12px; border: 1px dashed var(--border); border-radius: var(--radius); }
 .export-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
 .exp-card { border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; background: var(--bg-2); }
@@ -2152,11 +2558,9 @@ button.video-task-metric.on { box-shadow: 0 0 0 2px var(--accent); color: var(--
 .video-ref-card img { width: 100%; height: 42px; object-fit: cover; display: block; }
 .video-ref-card span { display: block; font-size: 9.5px; padding: 2px 3px; color: var(--text-2); }
 .video-history-current { position: absolute; right: 3px; top: 2px; font-size: 9px; font-weight: 700; color: #000; background: var(--accent); border-radius: 3px; padding: 0 3px; }
-.video-player-foot .video-foot-row { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
-.video-foot-label { font-size: 12px; color: var(--text-2); }
 .video-player-foot .mv-num { width: 84px; height: 28px; }
 .video-foot-model { font-size: 11px; color: var(--text-3); margin-bottom: 8px; }
-.video-player-foot .btn.show-all { width: 100%; }
+.video-player-foot .btn.show-all { width: auto; min-width: 96px; }
 
 .video-task-meta-line .is-running { color: var(--accent); font-weight: 600; }
 

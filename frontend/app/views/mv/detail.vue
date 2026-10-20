@@ -188,8 +188,8 @@
                         </div>
                       </div>
                       <div class="character-btn-row">
-                        <button class="btn btn-sm" type="button" :disabled="promptBusy === m.id" @click.stop="genPrompt(m)">
-                          {{ promptBusy === m.id ? '生成中…' : (m.prompt ? '重新生成提示词' : '生成提示词') }}
+                        <button class="btn btn-sm" type="button" :disabled="promptBusy.includes(m.id)" @click.stop="genPrompt(m)">
+                          {{ promptBusy.includes(m.id) ? '生成中…' : (m.prompt ? '重新生成提示词' : '生成提示词') }}
                         </button>
                         <button class="btn btn-sm" type="button" :disabled="isPending(m)" @click.stop="makeImage(m)">
                           {{ isPending(m) ? '出图中…' : (m.image ? '重绘' : '出图') }}
@@ -241,8 +241,8 @@
                 </div>
                 <div class="asset-foot">
                   <span :class="['dot', m.image && 'ok', isPending(m) && 'pending']" />
-                  <button class="btn btn-sm ml-auto" type="button" :disabled="promptBusy === m.id" @click.stop="genPrompt(m)">
-                    {{ promptBusy === m.id ? '生成中…' : (m.prompt ? '重新生成提示词' : '生成提示词') }}
+                  <button class="btn btn-sm ml-auto" type="button" :disabled="promptBusy.includes(m.id)" @click.stop="genPrompt(m)">
+                    {{ promptBusy.includes(m.id) ? '生成中…' : (m.prompt ? '重新生成提示词' : '生成提示词') }}
                   </button>
                   <button class="btn btn-sm" type="button" :disabled="isPending(m)" @click.stop="makeImage(m)">
                     {{ isPending(m) ? '出图中…' : (m.image ? '重绘' : '出图') }}
@@ -328,8 +328,8 @@
                 <section class="mat-detail-prompt-panel">
                   <div class="mat-detail-section-title">
                     <span>{{ editAsset.kind === 'character' ? '最终提示词 · 三视图' : '最终提示词 · 场景图' }}</span>
-                    <button class="btn btn-sm mat-detail-prompt-gen" :disabled="promptBusy === editAsset.id" @click="genPrompt(editAsset)">
-                      {{ promptBusy === editAsset.id ? '生成中…' : (editAsset.prompt ? '重新生成' : '生成提示词') }}
+                    <button class="btn btn-sm mat-detail-prompt-gen" :disabled="promptBusy.includes(editAsset.id)" @click="genPrompt(editAsset)">
+                      {{ promptBusy.includes(editAsset.id) ? '生成中…' : (editAsset.prompt ? '重新生成' : '生成提示词') }}
                     </button>
                   </div>
                   <textarea v-model="editAsset.prompt" class="textarea mat-detail-prompt-text" rows="6" placeholder="还没生成 —— 先点右上角「生成提示词」"></textarea>
@@ -463,7 +463,7 @@ const presets = ref([])
 const loading = ref(false)
 const activeTab = ref('songs')
 const assetTab = ref('all')
-const promptBusy = ref(null)
+const promptBusy = ref([])   // 正在生成提示词的资产 id 列表：每张卡各自锁
 const cardBusy = ref([])
 const viewer = ref({ open: false, src: '', title: '' })
 const editAsset = ref(null)
@@ -648,8 +648,8 @@ async function genPrompt(m) {
     alert('这个资产还没有描述 —— 先写清外貌/场景，再生成提示词')
     return
   }
-  if (promptBusy.value === m.id) return
-  promptBusy.value = m.id
+  if (promptBusy.value.includes(m.id)) return
+  promptBusy.value = [...promptBusy.value, m.id]
   try {
     const r = await api.post(`${assetBase(m)}/prompt`, {
       name: m.name, description: m.description, appearance: m.appearance, styling: m.styling,
@@ -660,7 +660,7 @@ async function genPrompt(m) {
   } catch (err) {
     alert(String(err?.message || err))
   } finally {
-    promptBusy.value = null
+    promptBusy.value = promptBusy.value.filter((x) => x !== m.id)
   }
 }
 

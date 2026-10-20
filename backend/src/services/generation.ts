@@ -471,6 +471,8 @@ async function processTask(id: number, config: AIConfig) {
   try {
     const [record] = await db.select().from(schema.sysTask).where(eq(schema.sysTask.id, id))
     if (!record) return
+    // 还在并发闸里排队时被用户点「停止」→ 不发了（否则照样占 GPU）
+    if (record.status !== 'processing') return
     const type = record.type as TaskType
     const label = taskLabel(type)
     const params = parseTaskParams(record.params)
@@ -663,6 +665,11 @@ async function pollTask(record: SysTaskRecord, config: AIConfig, taskId: string)
       return
     }
     await new Promise(r => setTimeout(r, profile.intervalMs))
+    // 用户点了「停止」→ 立刻不再管这条（也不许把 canceled 改回 completed/failed）
+    {
+      const [cur] = await db.select().from(schema.sysTask).where(eq(schema.sysTask.id, record.id))
+      if (!cur || cur.status !== 'processing') return
+    }
     try {
       const { url, method, headers } = adapter.buildPollRequest(config, taskId)
       logTaskProgress(label, 'poll-request', {

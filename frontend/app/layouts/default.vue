@@ -28,6 +28,17 @@
           <Settings :size="15" :stroke-width="1.8" />
           <span>{{ t('layout.nav.settings') }}</span>
         </NuxtLink>
+
+        <!-- 文本 / 图片 / 视频模型选择器：只有 MV 制作页会把它自己项目的选项塞进来 -->
+        <div v-if="headerModels" class="header-models">
+          <ModelSelect
+            v-for="m in HEADER_MODEL_KINDS" :key="m.kind"
+            :label="m.label" :options="headerModels.options[m.kind]"
+            :model-value="headerModels.value[m.kind]"
+            :default-label="headerModels.defaultLabel[m.kind]"
+            :show-config="headerModels.multi[m.kind]"
+            @update:model-value="(v) => headerModels.set(m.kind, v)" />
+        </div>
       </nav>
 
       <div class="header-right">
@@ -68,6 +79,12 @@ import brandLogo from '~/assets/brand-logo.png'
 const { t, locale } = useI18n()
 const route = useRoute()
 const showBrandImage = ref(true)
+const headerModels = useHeaderModels()
+const HEADER_MODEL_KINDS = [
+  { kind: 'text', label: '文本' },
+  { kind: 'image', label: '图片' },
+  { kind: 'video', label: '视频' },
+]
 
 // 渲染时求值，语言切换即时生效（不能模块级常量固化）
 const SERVICE_TYPE_LABELS = computed(() => ({
@@ -162,6 +179,12 @@ watch(locale, checkAiConfigs)
 }
 
 /* Nav — pill segmented group */
+/* 模型选择器：挤在导航里，窄一点；窗口窄时先牺牲它 */
+.header-models { display: flex; align-items: center; gap: 8px; margin-left: 4px; padding-left: 12px; border-left: 1px solid var(--border); overflow: hidden; }
+.header-models :deep(.model-select-label) { display: none; }
+.header-models :deep(.model-select-trigger) { max-width: 132px; }
+@media (max-width: 1180px) { .header-models { display: none; } }
+
 .header-nav {
   display: flex; gap: 2px;
   padding: 3px;
