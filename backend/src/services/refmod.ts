@@ -1,6 +1,6 @@
 /**
  * RefMod 卡服务（2026-10-08）
- *  - 「生成卡」：把资产（角色/场景/道具）的定妆图发给 4080 中转抽卡，卡回传后落盘到 **Mac 主副本** `<data>/refmods/`
+ *  - 「生成卡」：把资产（角色/场景/道具）的定妆图发给 服务器中转抽卡，卡回传后落盘到 **Mac 主副本** `<data>/refmods/`
  *  - 卡名规则：`refmod_<kind>-<id>_v1.safetensors`（kind = character | scene | prop），与前端下发的资产身份一一对应
  *  - 覆盖策略：同一资产重复抽卡 → **覆盖同一张**（用户 2026-10-08 拍板）
  *  - 卡是可选的：没有卡时生成照旧走老路（前端负责提示"先抽卡"）
@@ -42,8 +42,8 @@ export function refmodStatus(kind: RefmodKind, id: number): { name: string; read
 }
 
 /**
- * 抽卡：读资产定妆图 → 4080 中转 `/v2/refmod/extract` → 卡回传 → 落盘（覆盖）
- * 说明：抽卡不训练、只需 H3 视频 VAE，4080 侧分钟级完成。
+ * 抽卡：读资产定妆图 → 服务器中转 `/v2/refmod/extract` → 卡回传 → 落盘（覆盖）
+ * 说明：抽卡不训练、只需 H3 视频 VAE，服务器侧分钟级完成。
  */
 export async function extractRefmod(kind: RefmodKind, id: number): Promise<{ name: string; size: number }> {
   const cardName = refmodCardName(kind, id)
@@ -65,10 +65,10 @@ export async function extractRefmod(kind: RefmodKind, id: number): Promise<{ nam
   const mime = path.extname(abs).toLowerCase() === '.jpg' || path.extname(abs).toLowerCase() === '.jpeg' ? 'jpeg' : 'png'
   const dataUrl = `data:image/${mime};base64,${buf.toString('base64')}`
 
-  // 2) 4080 中转地址（取现役视频配置的 baseUrl）
+  // 2) 服务器中转地址（取现役视频配置的 baseUrl）
   const cfg = await getActiveConfig('video')
   const base = String(cfg?.baseUrl || '').trim().replace(/\/+$/, '')
-  if (!base) throw new Error('没有可用的视频服务配置，拿不到 4080 中转地址')
+  if (!base) throw new Error('没有可用的视频服务配置，拿不到 服务器中转地址')
 
   // 3) 抽卡（角色用 identity；场景/道具用 style）
   const resp = await fetch(`${base}/v2/refmod/extract`, {

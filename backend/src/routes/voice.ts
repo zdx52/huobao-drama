@@ -2,7 +2,7 @@
  * 角色声音路由（2026-10-08）
  *   GET  /voice/bases                    → 底样本库清单（下拉用）
  *   GET  /voice/bases/:id/audio          → 底样本 wav 试听（内嵌播放器用）
- *   POST /voice/preview {base,desc}      → 只试听：4080 TTS 出 wav（不落卡）
+ *   POST /voice/preview {base,desc}      → 只试听：服务器 TTS 出 wav（不落卡）
  *   POST /voice/generate {id,base,desc,force} → 生成/重抽声音卡（落 Mac 主副本）
  *   GET  /voice/status?id=15             → 单角色状态 {name,ready,pending,size}
  *   GET  /voice/status?ids=15,16         → 批量状态

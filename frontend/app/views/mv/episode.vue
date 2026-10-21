@@ -19,7 +19,7 @@
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><polyline points="12 7 12 12 16 14"/></svg>
             {{ Number(pj.songSeconds || 0).toFixed(1) }}s
           </span>
-          <span class="meta-item">{{ characters.length }} 人物 · {{ scenes.length }} 场景 · {{ shots.length }} 段</span>
+          <span class="meta-item">{{ characters.length }} 人物 · {{ scenes.length }} 场景{{ propsList.length ? ` · ${propsList.length} 道具` : '' }} · {{ shots.length }} 段</span>
         </div>
       </div>
       <div class="mv-top-selects">
@@ -198,8 +198,8 @@
           <button class="btn btn-sm" @click="tab = !hasStory() ? 'origin' : 'outline'">去第 {{ !hasStory() ? 1 : 2 }} 步</button>
         </div>
         <div class="mv-row">
-          <button class="btn btn-primary btn-sm" @click="extract" :disabled="busy">提取人物和场景</button>
-          <span class="field-hint">重新提取会覆盖当前人物/场景（图和卡要重出）</span>
+          <button class="btn btn-primary btn-sm" @click="extract" :disabled="busy">提取人物、场景和道具</button>
+          <span class="field-hint">重新提取会覆盖当前人物/场景/道具（图和卡要重出）；道具只提关键道具（0~3 个）</span>
         </div>
         <!-- 提取到同名角色/场景 → 问一句用哪个，不擅自串用别的 MV 的图 -->
         <div v-for="c in dupConflicts" :key="'dup' + c.assetId" class="mv-warn">
@@ -225,7 +225,7 @@
                 <div class="mv-char-head">
                   <div class="mv-name-row">
                     <strong class="mv-name">{{ a.name || '未命名' }}</strong>
-                    <span class="tag">人物</span>
+                    <span class="tag" :class="{ 'tag-accent': a.id === leadCharId }">{{ a.id === leadCharId ? '主唱' : '配角（不唱歌）' }}</span>
                   </div>
                   <div class="mv-summary" :title="a.appearance || a.description || ''">
                     <span class="mv-summary-label">样貌</span>{{ a.appearance || a.description || '（待填写）' }}
@@ -285,6 +285,44 @@
                 </div>
                 <div class="mv-final" :class="{ dim: !a.prompt }" :title="a.prompt || ''">
                   <span class="mv-final-label">最终提示词 · 场景图</span>{{ a.prompt || '未生成（先点「生成提示词」）' }}
+                </div>
+                <p v-if="a.imageStatus && a.imageStatus.startsWith('failed')" class="bad mv-asset-err">出图失败：{{ a.imageStatus.slice(8) }}</p>
+              </div>
+            </article>
+          </div>
+        </template>
+        <!-- 道具（白底单品，方形封面） -->
+        <template v-if="propsList.length">
+          <div class="mv-group-head"><span class="mv-group-name">道具</span><span class="tag">{{ propsList.length }}</span></div>
+          <div class="mv-scene-grid">
+            <article v-for="a in propsList" :key="'p' + a.id" class="card mv-scene-card" tabindex="0" role="button"
+              @click="openEdit(a)" @keydown.enter.prevent="openEdit(a)">
+              <button class="mv-del" title="删除" @click.stop="askRemoveAsset(a)">✕</button>
+              <div class="mv-cover" style="aspect-ratio: 1 / 1">
+                <img v-if="a.image" :src="staticUrl(a.image)" :alt="a.name" class="previewable-image" @click.stop="openViewer(a)" />
+                <div v-else class="mv-cover-empty">未出图</div>
+                <span class="mv-badge" :class="a.image ? 'is-ready' : ''">{{ a.image ? '道具已生成' : '待生成' }}</span>
+              </div>
+              <div class="mv-asset-body">
+                <div class="mv-name-row">
+                  <strong class="mv-name">{{ a.name || '未命名' }}</strong>
+                  <span class="tag">道具</span>
+                </div>
+                <div class="mv-summary" :title="a.description || ''">
+                  <span class="mv-summary-label">外观</span>{{ a.description || '（待填写）' }}
+                </div>
+                <div class="mv-card-btns">
+                  <button class="btn btn-sm" @click.stop="genPrompt(a)" :disabled="promptBusy.includes(a.id)">
+                    {{ promptBusy.includes(a.id) ? '生成中…' : (a.prompt ? '重新生成提示词' : '生成提示词') }}
+                  </button>
+                  <button class="btn btn-sm" @click.stop="makeImage(a)" :disabled="a.imageStatus === 'processing'">
+                    {{ a.imageStatus === 'processing' ? '出图中…' : (a.image ? '重绘' : '出图') }}
+                  </button>
+                  <button class="btn btn-sm" @click.stop="makeCard(a)" :disabled="!a.image || cardBusy.includes(a.id)">{{ cardBusy.includes(a.id) ? '排队中…' : '生卡' }}</button>
+                  <span v-if="a.card" class="tag tag-success">卡已生成</span>
+                </div>
+                <div class="mv-final" :class="{ dim: !a.prompt }" :title="a.prompt || ''">
+                  <span class="mv-final-label">最终提示词 · 道具图</span>{{ a.prompt || '未生成（先点「生成提示词」）' }}
                 </div>
                 <p v-if="a.imageStatus && a.imageStatus.startsWith('failed')" class="bad mv-asset-err">出图失败：{{ a.imageStatus.slice(8) }}</p>
               </div>
@@ -417,7 +455,11 @@
                 <section class="video-inspector-section">
                   <span class="video-inspector-label">本段内容（分镜描述）</span>
                   <div class="mv-shot-fields">
-                    <div class="mv-shot-field"><span class="k">景别</span><span class="v">{{ activeShot.shotSize || '—' }}</span></div>
+                    <div class="mv-shot-field"><span class="k">景别</span>
+                      <select class="mv-sel" :value="activeShot.shotSize || '中景'" @change="setShotSize(activeShot, $event.target.value)">
+                        <option v-for="z in SHOT_SIZES" :key="z" :value="z">{{ z }}</option>
+                      </select>
+                    </div>
                     <div class="mv-shot-field"><span class="k">机位 / 运镜</span><span class="v">{{ shotCamera(activeShot) }}</span></div>
                     <div class="mv-shot-field"><span class="k">人物动作</span><span class="v">{{ shotAction(activeShot) }}</span></div>
                     <div class="mv-shot-field"><span class="k">出场</span><span class="v mv-cast">{{ shotCast(activeShot) }}</span></div>
@@ -681,7 +723,7 @@
         <section class="card mv-detail-dialog">
           <header class="mv-detail-head">
             <div class="mv-detail-title-block">
-              <span class="mv-detail-kicker">{{ editAsset.kind === 'character' ? '人物' : '场景' }}</span>
+              <span class="mv-detail-kicker">{{ editAsset.kind === 'character' ? '人物' : editAsset.kind === 'prop' ? '道具' : '场景' }}</span>
               <h2 class="mv-detail-title">{{ editAsset.name || '未命名' }}</h2>
             </div>
             <div class="mv-detail-head-actions">
@@ -700,12 +742,12 @@
                 </div>
                 <button type="button" class="mv-detail-media-frame" :disabled="!editAsset.image" @click.stop="openViewer(editAsset)">
                   <img v-if="editAsset.image" :src="staticUrl(editAsset.image)" :alt="editAsset.name" />
-                  <span v-else class="mv-detail-media-empty">{{ editAsset.kind === 'character' ? '未出形象图' : '未出场景图' }}</span>
+                  <span v-else class="mv-detail-media-empty">{{ editAsset.kind === 'character' ? '未出形象图' : editAsset.kind === 'prop' ? '未出道具图' : '未出场景图' }}</span>
                 </button>
                 <div class="mv-detail-meta-row">
                   <div class="mv-detail-meta-item">
                     <span>类型</span>
-                    <strong>{{ editAsset.kind === 'character' ? '人物形象（16:9 三视图）' : '场景图（跟随项目画幅）' }}</strong>
+                    <strong>{{ editAsset.kind === 'character' ? '人物形象（16:9 三视图）' : editAsset.kind === 'prop' ? '道具图（白底单品 1024）' : '场景图（跟随项目画幅）' }}</strong>
                   </div>
                   <div class="mv-detail-meta-item">
                     <span>生卡</span>
@@ -737,16 +779,16 @@
                     </label>
                   </template>
                   <label class="mv-detail-edit-field">
-                    <span>{{ editAsset.kind === 'character' ? '描述（提取原文，可留空）' : '场景描述' }}</span>
+                    <span>{{ editAsset.kind === 'character' ? '描述（提取原文，可留空）' : editAsset.kind === 'prop' ? '道具外观' : '场景描述' }}</span>
                     <textarea v-model="editAsset.description" class="textarea mv-detail-textarea" rows="5"
-                      :placeholder="editAsset.kind === 'character' ? '提取时写下的那段描述' : '地点 / 时间 / 光线 / 色调 / 氛围'"></textarea>
+                      :placeholder="editAsset.kind === 'character' ? '提取时写下的那段描述' : editAsset.kind === 'prop' ? '材质 / 颜色 / 形状 / 大小 / 磨损；有文字就逐字写在英文引号里；不写姿态' : '地点 / 时间 / 光线 / 色调 / 氛围'"></textarea>
                   </label>
                 </div>
 
                 <!-- 最终提示词面板 -->
                 <div class="mv-detail-prompt-panel">
                   <div class="mv-detail-section-title">
-                    <span>{{ editAsset.kind === 'character' ? '最终提示词 · 三视图' : '最终提示词 · 场景图' }}</span>
+                    <span>{{ editAsset.kind === 'character' ? '最终提示词 · 三视图' : editAsset.kind === 'prop' ? '最终提示词 · 道具图' : '最终提示词 · 场景图' }}</span>
                     <button class="btn btn-sm mv-detail-prompt-gen" @click="genPrompt(editAsset)" :disabled="promptBusy.includes(editAsset.id)">
                       {{ promptBusy.includes(editAsset.id) ? '生成中…' : (editAsset.prompt ? '重新生成' : '生成提示词') }}
                     </button>
@@ -1005,6 +1047,9 @@ const coverAspect = computed(() => String(pj.value.aspectRatio || '16:9').replac
 const pj = computed(() => current.value?.project || {})
 const characters = computed(() => assets.value.filter((a) => a.kind === 'character'))
 const scenes = computed(() => assets.value.filter((a) => a.kind === 'scene'))
+const propsList = computed(() => assets.value.filter((a) => a.kind === 'prop'))
+/** 主唱 = 第一个人物（提取时要求主角排第一）；提示词里只有它对嘴 */
+const leadCharId = computed(() => characters.value[0]?.id ?? null)
 // 「视频制作」页（照短剧）：选中段、统计、绑定参考图、行缩略
 const activeShotId = ref(null)
 const activeShot = computed(() => shots.value.find((s) => s.id === activeShotId.value) || shots.value[0] || null)
@@ -1017,7 +1062,8 @@ const videoStats = computed(() => ({
   failed: shots.value.filter((s) => s.status === 'failed').length,
 }))
 const allRefAssets = computed(() => assets.value.filter((a) => a.image)
-  .map((a) => ({ id: a.id, url: a.image, name: a.name, kind: a.kind, kindLabel: a.kind === 'character' ? '人物卡' : '场景卡' })))
+  .map((a) => ({ id: a.id, url: a.image, name: a.name, kind: a.kind,
+    kindLabel: a.kind === 'character' ? '人物卡' : a.kind === 'prop' ? '道具卡' : '场景卡' })))
 // 这一段绑了哪些图：存 refIds（JSON 数组）；没绑过 = 默认「人物卡 + 场景卡」
 const defaultRefIds = () => [characters.value.find((a) => a.image)?.id, scenes.value.find((a) => a.image)?.id].filter(Boolean)
 function shotRefIdList(s) {
@@ -1455,6 +1501,16 @@ function goNext(to) {
   tab.value = to
 }
 
+// 景别可改（改完必须重新生成提示词，中英才会一起变）
+const SHOT_SIZES = ['大特写', '特写', '近景', '中景', '中远景', '远景', '全景']
+async function setShotSize(s, v) {
+  if (!s || !v || s.shotSize === v) return
+  s.shotSize = v
+  const r = await call(() => api.put(`/mv/projects/${pj.value.id}/shots/${s.id}`, { shot_size: v }), '正在保存景别…')
+  if (r) s.shotSize = v
+  if (r) alert(`景别已改为「${v}」。要让它进提示词，请点这一段的「重新生成」—— 中文和英文会一起改。`)
+}
+
 async function call(fn, msg) {
   busy.value = true
   stepMsg.value = msg || ''
@@ -1566,19 +1622,46 @@ async function saveCredits() {
   if (r?.project) current.value = { ...current.value, project: r.project }
 }
 
-/** 自动对轴：纯歌词 + 人声轨 → 逐句时间轴（4080 上跑 Whisper） */
+/** 自动对轴：纯歌词 + 人声轨 → 逐句时间轴（服务器上跑 Whisper）
+ *  2026-10-21：改成异步任务轮询 —— 显卡被视频任务占用时服务器排队，这里显示「排队中」 */
 async function alignLyrics() {
   if (!lyrics.value.trim() || alignBusy.value) return
   alignBusy.value = true
-  alignMsg.value = '正在用人声轨对轴（约 20 秒）…'
+  alignMsg.value = '提交对轴…'
   try {
-    // 不走 call()：它的 finally 会立刻清掉 stepMsg，对轴一进缓存（0 秒）就什么都看不到
-    const r = await api.post(`/mv/projects/${pj.value.id}/align`, {})
-    if (r?.lrc) {
-      lyricLrc.value = r.lrc
-      alignMsg.value = `已对轴 · ${r.lines} 句` + (r.unmatched ? `（${r.unmatched} 句按邻句插值）` : '') + (r.cached ? ' · 缓存' : '')
-    } else {
-      alignMsg.value = '对轴没有返回时间轴'
+    // job:true = 走异步任务（显卡被占用时排队，界面显示「排队中」）；
+    // 后端同时兼容旧协议（不传 job 时同步返回 lrc），这里两种都收。
+    const r0 = await api.post(`/mv/projects/${pj.value.id}/align`, { job: true })
+    const showDone = (d) => {
+      lyricLrc.value = d.lrc
+      alignMsg.value = `已对轴 · ${d.lines} 句` + (d.unmatched ? `（${d.unmatched} 句按邻句插值）` : '') + (Number(d.seconds) === 0 ? ' · 缓存' : '')
+    }
+    // 提交响应就带 lrc（缓存命中 / 后端走了旧协议）→ 直接用，不用轮询
+    if (r0?.lrc) { showDone(r0); return }
+    const jobId = r0?.job_id
+    if (!jobId) {
+      alignMsg.value = '对轴没有返回任务号'
+      return
+    }
+    let st = { state: r0?.state || 'queued', message: r0?.message || '', lrc: '', lines: 0, unmatched: 0, seconds: 0, error: '' }
+    while (true) {
+      if (st?.state === 'done') {
+        if (!st.lrc) {                       // done 却没 lrc → 必须去 status 取，别直接 break
+          st = await api.post(`/mv/projects/${pj.value.id}/align/status`, { job_id: jobId })
+          if (st?.state !== 'done' || !st.lrc) { alignMsg.value = '对轴完成但没拿到时间轴，请再点一次'; break }
+        }
+        showDone(st)
+        break
+      }
+      if (st?.state === 'failed') {
+        alignMsg.value = '对轴失败：' + String(st.error || '')
+        break
+      }
+      alignMsg.value = st?.state === 'queued'
+        ? (st?.message || '排队中：显卡被视频任务占用，轮到就自动开始…')
+        : '对轴中（GPU）…'
+      await new Promise((res) => setTimeout(res, 3000))
+      st = await api.post(`/mv/projects/${pj.value.id}/align/status`, { job_id: jobId })
     }
   } catch (err) {
     alignMsg.value = '对轴失败：' + String(err?.message || err)
@@ -1776,11 +1859,11 @@ async function render(s) {
 /** 停止某一段：排队中的直接作废，正在跑的也会在下一轮轮询收尾（不删已生成的成片） */
 async function stopShot(s) {
   if (!s) return
-  // 已经在 GPU 上跑的那条停不掉（4080 会跑完），只有还在排队的能真作废 —— 先把代价说清楚再动手
+  // 已经在 GPU 上跑的那条停不掉（服务器会跑完），只有还在排队的能真作废 —— 先把代价说清楚再动手
   const running = !!taskRows.value.find((r) => r.id === s.id)?.running   // 排队中(false) 还是已在 GPU 上出片(true)
   askConfirm('停止生成',
     running
-      ? `第 ${s.shotNumber} 段已经在出片了：这里只能让它从本段撤下来（不再等结果），4080 上那一条仍会跑完、不会自动入库。已生成的旧片不受影响。继续？`
+      ? `第 ${s.shotNumber} 段已经在出片了：这里只能让它从本段撤下来（不再等结果），服务器上那一条仍会跑完、不会自动入库。已生成的旧片不受影响。继续？`
       : `停止第 ${s.shotNumber} 段的排队（还没开始跑，可省掉这一条）。已生成的旧片不受影响。继续？`,
     '停止', () => doStopShot(s))
 }

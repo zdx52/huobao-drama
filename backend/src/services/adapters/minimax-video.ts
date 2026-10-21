@@ -91,12 +91,12 @@ export class MiniMaxVideoAdapter implements VideoProviderAdapter {
       resolution: this.normalizeResolution(record.resolution),
     }
 
-    // RefMod 卡（2026-10-08）：随请求下发；4080 中转落盘到 models/refmods/ 并按参考图同序填槽
+    // RefMod 卡（2026-10-08）：随请求下发；服务器中转落盘到 models/refmods/ 并按参考图同序填槽
     if (Array.isArray(record.refmodFiles) && record.refmodFiles.length) {
       body.refmod_files = record.refmodFiles
     }
 
-    // 角色声音源 wav（2026-10-11）：与图片卡分开传，4080 落盘成 voice_<卡名>.wav(32k) 供官方 ref_audios 用
+    // 角色声音源 wav（2026-10-11）：与图片卡分开传，服务器落盘成 voice_<卡名>.wav(32k) 供官方 ref_audios 用
     if (Array.isArray(record.voiceWavFiles) && record.voiceWavFiles.length) {
       body.voice_wav_files = record.voiceWavFiles
     }

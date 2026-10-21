@@ -73,6 +73,18 @@ description: 视频提示词规范 — 根据分镜段落内容生成按时间�
   - 参考板是**四格**（从左到右：脸部特写 / 无头正面全身 / 无头90度左侧面全身 / 无头背面全身），格子名**逐字照抄**：`脸部特写格` / `正面全身格` / `90度左侧面全身格` / `背面全身格`（近景特写取脸部特写格，全身中景取正面全身格）。**禁止**造格（如"手部格"）、**禁止**一次点两格、禁止改格子名
 - **中转会按 header 自动拼官方 R2V 骨架**：`subject_definitions`（`<Subject N>` 定义"是谁"、`<Picture N>` 对应第 N 张参考图、`mod_N` 对应第 N 张身份卡——**四者同号**）、`retention_analysis: fully_preserved`、`detailed_description`，并把正文里的 `@名` 换成 `<Subject N>`——所以 **header 必须写全、顺序必须与参考图顺序一致**，否则身份声明对错图
 
+## 🔴 MV 单主唱铁律（2026-10-20 用户拍板，MV 专属）
+
+这支 MV 是**一个人唱**：原曲人声只有一条，画面里**只允许主唱一人张嘴**。
+
+- **主唱 = `<Subject 1>`**（本段第一个角色主体）。唱段（有唱/`vocal_active`）里只写它一个人对嘴：
+  `<Subject 1> is the lead singer: only <Subject 1>'s lips articulate every audible phoneme in sync with <Audio 1>.`
+- **画面里其他所有人一律闭嘴、不唱、不对嘴**（观众、乐队、路人、舞伴都是）：写正向状态 `keeps the mouth closed and stays silent` / `no lip-sync, no singing, no mouthing the words`。
+- **不许写**「大家一起唱」「众人合唱」「duet」「all sing along」「crowd singing」这类任何多人同时开口的描述；也不要写「张嘴」「towards the camera singing」给非主唱主体。
+- **非唱段（间奏）谁都不许对嘴**：`Nobody sings in this clip: every mouth stays closed and no one mouths the words, <Audio 1> plays as the soundtrack.`
+- **多人同框时先想清楚必要性**：MV 通常只需要主唱一人；确实要有配角在场（观众/乐队）就写清它闭着嘴，并且**不给它特写嘴部**（不写 `lips` / `mouth` / `jaw` / `chin` 落在配角身上）。
+- **配角不许抢主唱的对嘴句**：锁嘴/对嘴句的主语只能出现在主唱身上，一拍的正文里**不要**对第二个人写任何嘴部动作。
+
 ## 正文瘦身
 
 **身份与外观不在正文里写**，正文只写"演什么、怎么拍"。

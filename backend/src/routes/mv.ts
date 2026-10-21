@@ -2,7 +2,7 @@
  * 音乐 MV 路由（2026-10-18 新增，独立模块）
  *
  * 与短剧链路彻底隔离：不写 storyboards / characters / scenes，只用自己的三张表
- * （mv_projects / mv_assets / mv_shots）+ 4080 shim 的 /v2/mv/* 接口。
+ * （mv_projects / mv_assets / mv_shots）+ 服务器 shim 的 /v2/mv/* 接口。
  * 生成全部走 App 现成的三条通道（不写死地址和模型）：
  *   文本 = getTextConfig()｜图片 = generateImage()｜视频 = generateVideo(model=minimax-h3-mv)
  *
@@ -11,7 +11,7 @@
  *   → 逐个出图 → 逐个抽卡 → 粗分镜（与歌等长）→ 详细分镜（景别/机位/歌词）
  *   → 编译六段式提示词 → 逐段出片 → 无音轨拼接 + 原曲整段混入
  *
- * 4080 侧只用 shim 的 MV 专属接口（地址取自「视频通道」配置）：
+ * 服务器侧只用 shim 的 MV 专属接口（地址取自「视频通道」配置）：
  *   POST /v2/mv/audio        原曲 32k wav 落盘（只推一次）
  *   POST /v2/mv/plan         按能量/句界切段（H3 帧网格 5.167~14.375s，命中上限）
  *   POST /v2/mv/prompts      六段式提示词编译 + 硬校验
@@ -45,7 +45,7 @@ function assFilterPath(p: string): string {
 import { ffmpeg } from '../utils/ffmpeg.js'
 // 2026-10-19：MV 提示词完全走自己的链路（askText + 只读技能文本），**不引短剧的任何服务/Agent**
 
-// 4080 模板 mv_shot.api.json 节点14 的音频窗口 warmup_seconds（那边改了这里要同步）
+// 服务器模板 mv_shot.api.json 节点14 的音频窗口 warmup_seconds（那边改了这里要同步）
 const MV_WARMUP_SECONDS = 0.5
 
 /** 音频窗口带 warmup 前导 → 成片开头多 warmup、总长按帧网格取整变长（192 帧 vs 声明 175）。
@@ -99,12 +99,12 @@ const app = new Hono()
 const MV_MODEL = 'minimax-h3-mv'   // 中转按 model 名走 mv_shot.api.json
 const HARD_MAX_S = 15              // H3 单段极限（页面填的「最长切分」不得超）
 const DEFAULT_MAX_S = 10
-const KINDS = ['character', 'scene'] as const
+const KINDS = ['character', 'scene', 'prop'] as const   // 2026-10-20 加道具（照短剧：关键道具要单独出图、单独生卡）
 type Kind = typeof KINDS[number]
 
 // ---------------------------------------------------------------- 基础工具
 
-/** 4080 地址：优先 MV_SHIM_BASE，其次「视频通道」的 baseUrl（不写死）
+/** 服务器地址：优先 MV_SHIM_BASE，其次「视频通道」的 baseUrl（不写死）
  *  末尾可能被填成 …:8100/v1（BeefTV 的口径）→ 去掉 v1/v2 段，MV 自己拼 /v2/mv/… */
 async function shimBase(): Promise<string> {
   const env = String(process.env.MV_SHIM_BASE || '').trim()
@@ -134,6 +134,35 @@ async function shimPost<T = any>(p: string, body: any): Promise<T> {
   try { json = JSON.parse(text) } catch { /* 非 JSON */ }
   if (!resp.ok || json?.error) throw new Error(json?.error || `中转 ${p} HTTP ${resp.status}：${text.slice(0, 160)}`)
   return json as T
+}
+
+/**
+ * 这一段时间窗对应的初步分镜（去重）
+ *
+ * 2026-10-21：用户在初步分镜里「改一段」时常常是**复制出新段**、旧段没删，
+ * 再加上下一段起点可能正好落在本段结束前（如 104.46 < 104.625）——
+ * 直接 filter+join 会把三条重复描写全塞进中文稿（分镜 16 就是这样：
+ * 靠在电梯厢壁上 / 手机屏幕… / 电梯门开… 叠在一起）。
+ * 规则：按「起点离本段起点最近」优先，与已选段重叠超过 50% 的丢掉。
+ */
+export function outlineForWindow(outline: any[], start: number, end: number): any[] {
+  // 交集不足 0.5 秒的段不要：那只是段边界没对齐的尾巴（分镜 16 就是被下一段的 0.16 秒带进了「电梯门开」）
+  const ov = (outline || []).filter((o: any) => {
+    const inter = Math.min(Number(o?.end), end) - Math.max(Number(o?.start), start)
+    return inter >= 0.5
+  })
+  const overlapRatio = (a: any, b: any) => {
+    const from = Math.max(Number(a.start), Number(b.start))
+    const to = Math.min(Number(a.end), Number(b.end))
+    const inter = Math.max(0, to - from)
+    const shorter = Math.min(Number(a.end) - Number(a.start), Number(b.end) - Number(b.start)) || 1
+    return inter / shorter
+  }
+  const chosen: any[] = []
+  for (const o of ov.slice().sort((a: any, b: any) => Math.abs(Number(a.start) - start) - Math.abs(Number(b.start) - start))) {
+    if (chosen.every((c) => overlapRatio(o, c) < 0.5)) chosen.push(o)
+  }
+  return chosen.sort((a: any, b: any) => Number(a.start) - Number(b.start))
 }
 
 /** 中文稿 = 导演分镜稿：镜头编号 + 时间码 + 景别 + 机位 + 画面内容（给用户看和改） */
@@ -237,7 +266,9 @@ async function mvShotPromptSkill(
         const cast = (chars.length ? chars : (character?.name ? [character] : []))
           .map((a: any) => '@' + String(a.name)).join('、') || '@主角'
         const scene2 = (picked || []).find((a: any) => a.kind === 'scene' && a.name) || sc
-        return `出场人物：${cast}；场景：@${scene2?.name || '主场景'}`
+        const props2 = (picked || []).filter((a: any) => a.kind === 'prop' && a.name)
+          .map((a: any) => '@' + String(a.name)).join('、')
+        return `出场人物：${cast}；场景：@${scene2?.name || '主场景'}${props2 ? `；道具：${props2}` : ''}`
       })(),
       pictures: (picked || []).map((a: any, i: number) => ({
         n: i + 1, name: a.name, kind: a.kind,
@@ -245,12 +276,13 @@ async function mvShotPromptSkill(
         assetText: [a.appearance, a.styling, a.description]
           .map((x: any) => String(x || '').trim()).filter(Boolean).join(' / ').slice(0, 900),
       })),
-      outlineText: outline
-        .filter((o: any) => Number(o?.end) > start && Number(o?.start) < end)
+      outlineText: outlineForWindow(outline, start, end)
         .map((o: any) => `[${o.start}-${o.end}s] ${o.what}`).join('\n'),
       beats: beats.map((b: any) => ({
         start: Number(b.start) || 0, end: Number(b.end) || 0,
-        size: String(b.size || ''), camera: String(b.camera || ''),
+        // 2026-10-21：段级景别（shot.shotSize）优先 —— 用户改了「景别」却被 beats 里的旧值盖回去，
+        //            中文稿永远不变（英文又自己译成 close-up），中英就分叉了
+        size: String(shot.shotSize || b.size || ''), camera: String(b.camera || ''),
         action: String(b.action || ''), action_zh: String(b.action_zh || ''),
       })),
       seconds: secs, start, frames: Number(shot.frames) || 0,
@@ -263,11 +295,11 @@ async function mvShotPromptSkill(
         shotPromptProgress.set(Number(shot.id), { step, total, label, at: Date.now(), done: false })
       },
     }, (system, user) => askText(system, user, 4000, project.textConfigId))
-    shotPromptProgress.set(Number(shot.id), { step: 4, total: 4, label: '完成', at: Date.now(), done: true })
+    shotPromptProgress.set(Number(shot.id), { step: 8, total: 8, label: '完成', at: Date.now(), done: true })
     return out
   } catch (err: any) {
     lastShotPromptError = String(err?.message || err)
-    shotPromptProgress.set(Number(shot.id), { step: 0, total: 4, label: `失败：${lastShotPromptError.slice(0, 80)}`, at: Date.now(), done: true })
+    shotPromptProgress.set(Number(shot.id), { step: 0, total: 8, label: `失败：${lastShotPromptError.slice(0, 80)}`, at: Date.now(), done: true })
     logTaskError('MV', 'shot-prompt', { sid: shot.id, error: lastShotPromptError })
     return null
   }
@@ -484,6 +516,17 @@ async function libraryAssetsOf(kind?: Kind) {
   return rows.sort((a, b) => (Number(a.sortOrder || 0) - Number(b.sortOrder || 0)) || a.id - b.id)
 }
 
+/** 道具名的可匹配写法：全名 + 去掉类目后缀 + 前两个字（歌词里常只写简称，如「宵夜」） */
+function propNameKeys(name: any): string[] {
+  const n = String(name || '').replace(/\s+/g, '')
+  const keys = new Set<string>()
+  if (n.length >= 2) keys.add(n)
+  const stripped = n.replace(/(保温袋|包装袋|手提袋|纸袋|塑料袋|礼物盒|盒子|杯子|瓶子|袋子|袋|盒|杯)$/, '')
+  if (stripped.length >= 2) keys.add(stripped)
+  if (n.length > 2) keys.add(n.slice(0, 2))
+  return [...keys].filter((k) => k.length >= 2)
+}
+
 async function assetsOf(projectId: number, kind?: Kind) {
   // 2026-10-20：资产**只认这首歌自己**（projectId）。早前按 mv_assets.series_id 合并同系列，
   // 导致新歌一导入就显示上一首歌的人物/场景；现在必须「提取人物和场景」后才有。
@@ -543,6 +586,7 @@ const MV_FALLBACK_PROMPTS: Record<string, string> = {
   mv_asset_image: '为人物或场景写生图提示词，只输出提示词正文。',
   mv_storyboard: '按歌曲把内容切成带起止时间的段落（每段 3~10 秒），只输出 JSON 数组。',
   mv_camera: '为每个段落补景别与运镜，相邻段避免重复，只输出 JSON 数组。',
+  mv_prop_map: '判断每个分镜段落里出现了哪些道具，只输出 JSON。',
 }
 
 /**
@@ -571,7 +615,7 @@ async function waitTask(taskId: number, timeoutMs = 600_000) {
   throw new Error(`任务 ${taskId} 超时未完成`)
 }
 
-/** 本地读时长（ffprobe），建项目时就能给粗分镜用，不必先送 4080 */
+/** 本地读时长（ffprobe），建项目时就能给粗分镜用，不必先送 服务器 */
 function probeSeconds(file: string): Promise<number> {
   return new Promise((resolve) => {
     try {
@@ -584,7 +628,7 @@ function probeSeconds(file: string): Promise<number> {
 }
 
 /**
- * 原曲送 4080 —— **只在第一次真正需要时做**（切分镜 / 提交片段），建项目时只落本地。
+ * 原曲送 服务器 —— **只在第一次真正需要时做**（切分镜 / 提交片段），建项目时只落本地。
  * 做一次就记住文件名，之后每段只带名字。
  */
 async function ensureRemoteSong(project: any): Promise<string> {
@@ -847,7 +891,7 @@ app.delete('/projects/:id', async (c) => {
   return success(c, null)
 })
 
-/** 建项目：只做本地的事（落库 + 存歌 + 读时长），不碰 4080 */
+/** 建项目：只做本地的事（落库 + 存歌 + 读时长），不碰 服务器 */
 app.post('/projects', async (c) => {
   let body: any
   try { body = await c.req.json() } catch (err: any) { return badRequest(c, `请求体不是 JSON: ${err?.message}`) }
@@ -931,35 +975,73 @@ app.post('/projects/:id/extract', async (c) => {
   const body = await c.req.json().catch(() => ({} as any))
   const story = String(body.story_prompt ?? project.storyPrompt ?? '').trim()
   if (!story) return badRequest(c, '先填分镜提示词，再提取人物和场景')
+  // 2026-10-20 用户报「资产提取的场景跟初步分镜对不上」：以前只喂全局的分镜提示词，
+  // 而初步分镜（outline）每段已经写了具体地点/光线/氛围 —— 提取必须以它为准。
+  let outlineTxt = ''
+  try {
+    const rows = JSON.parse(String(project.outline || '[]'))
+    if (Array.isArray(rows) && rows.length) {
+      outlineTxt = rows.map((x: any) => `[${Number(x.start).toFixed(2)}-${Number(x.end).toFixed(2)}s] ${String(x.what || '')}`).join('\n')
+    }
+  } catch { outlineTxt = '' }
+  const outlineBlock = outlineTxt
+    ? `\n这支 MV 的**初步分镜**（已定稿，每段就是实际要拍的画面，场景必须照它来）：\n"""\n${outlineTxt.slice(0, 8000)}\n"""\n`
+    : ''
   const ask = `下面是这支 MV 的分镜提示词（用户写的）：
 
 """
 ${story.slice(0, 12000)}
 """
-
+${outlineBlock}
 请从中提取**人物**和**场景**，**严格按上面那份规范**填字段（规范里要求的四项颜色、禁模糊词、字数都要照做）：
-1) 只提取这份分镜提示词里真实出现过的，不要自己发明、不要补充没写的东西。
+1) **人物**只提取这份分镜提示词/初步分镜里真实出现过的，不要自己发明人物、不要补充没写的人。
+1a) 🔴 **MV 是单人演唱，人物宁少不多**：最多 4 个，按重要性排序，**第一个必须是把这首歌唱出来的主角**（后面按 sortOrder 第一个即主唱）。只传一个就只提一个；写「路人/观众/乐队」这类群体时不单独建人物。配角只写它在这支 MV 里的身份（朋友/观众/乐队），并在 description 末尾注明「画面里不唱歌、不对嘴、嘴一直闭着」。
+1b) 🔴 **场景以上面的初步分镜为准**：把初步分镜里出现的地点归并成 1~3 个场景，**名字和 description 直接用分镜里写的那个地点/光线/氛围**（分镜写「海边黄昏」就不要写成「海边·日」），不许换地方、不许只按全局提示词编。
+1c) 场景**至少 1 个**：初步分镜和分镜提示词都没点名地点时（例如只写「按歌词适配合适的场景」），才根据歌词和画面自己定 1~3 个最合适的场景（用户要求的适配，不算发明），名字写成「地点+时间」。
+1d) **道具（props）**：只提**关键道具**——必须同时满足「删掉它剧情/画面就不成立」和「值得单独出图（会被特写或反复出现，需要固定外观）」。判定三问，任一答否就放弃：① 删掉它画面是否依然成立？成立 → 不提；② 只是随手用的日常物品（手机、杯子、筷子、烟）吗？是 → 不提；③ 是场景陈设（桌椅、灯具、门窗、装饰）吗？是 → 不提。
+   例外：某个日常物品**本身承载关键信息**（纸条上的字、证件、通知书、屏幕上的通知）且分镜会给它特写时**要提**，此时判定的对象是「信息载体」而不是「手机」这个物品——name 写清载体（如「录取通知书」），description 里把要显示的文字逐字写出来（加英文双引号，单行中文 ≤6 字）。
+   **宁可少提**：0~3 个，按重要性只留前 3 个；没有就返回空数组，不许凑数。
+   🔴 道具 description 只写**物品本身的物理外观**（材质、颜色、形状、大小、新旧磨损），**不写剧情用途、不写和人物的关系、不写它怎么被使用**；**不许写姿态/朝向**（躺平、立着、正面朝上），姿态交给视频。
+   🔴 场景 description 里**不要写这些道具**（它们有自己的资产和参考图，写进场景图会把道具画进空镜里）。
 2) 人物 appearance（样貌）按规范写成 **300~500 字**：性别、年龄感、五官、发型发色、**肤色的色阶与明暗**、体态、气质（性格要转成外在神态写，不要直接写性格词）。
 3) 人物 styling（妆造）：发型、服装、妆面、配饰 —— **每件单品都要写颜色**（外套/上衣/裤子/鞋），配饰写颜色或材质。
 4) 人物 description = 样貌 + 妆造的完整合并描述（同样写长写具体，不要只有一句）。
 5) 🔴 四项颜色（发色 / 肤色 / 服装颜色 / 配饰颜色或材质）一个都不能少；**禁止「或」「或者」「可能」「皆可」这类二选一**，原文带「或」就当场挑定一个写死。
 6) 场景 description：地点、时间、光线、色调、氛围、前景/中景/后景层次（写具体，不要一句话带过）。
 7) name 用简短中文名（人物用名字或代称，场景用「地点+时间」）；同一个人的不同叫法合并成一个人。
-8) 没有人物就返回空数组。
+7b) 🔴 **道具名必须用歌词/初步分镜里出现过的那个词**（歌词写「宵夜」就命名「宵夜」，别写成「外卖保温袋」这种类别名）——下游是按名字把道具绑到分镜上的，名字对不上就绑不上。确实没有原词的才用最常见的日常叫法。
+8) 没有人物就返回空的人物数组，但 **scenes 不许为空**（至少 1 个）。
 
 只输出 JSON：
-{"characters":[{"name":"","description":"","appearance":"","styling":""}],"scenes":[{"name":"","description":""}]}
+{"characters":[{"name":"","description":"","appearance":"","styling":""}],"scenes":[{"name":"","description":""}],"props":[{"name":"","description":""}]}
 appearance 只写脸/身形容貌，styling 只写服装配饰；拆不出来就留空。`
   try {
-    const out = pickJson<{ characters?: any[]; scenes?: any[] }>(
+    const out = pickJson<{ characters?: any[]; scenes?: any[]; props?: any[] }>(
       await askText(
         await mvPrompt('mv_extractor'),
         ask, 6000, project.textConfigId))
+    // 兜底：模型还是没给场景 → 只问一次「这首歌词该配什么场景」（有界 1 次，不循环）
+    if (!Array.isArray(out.scenes) || !out.scenes.length) {
+      try {
+        const lyricBlock = String(project.lyrics || '').slice(0, 3000) || '（无）'
+        const fix = pickJson<{ scenes?: any[] }>(await askText(
+          await mvPrompt('mv_extractor'),
+          `这支 MV 用户没有点名场景，只要求「按歌词适配合适的场景」。下面是分镜提示词和歌词：\n\n"""\n${story.slice(0, 8000)}\n"""\n\n${outlineTxt ? `初步分镜（场景以它为准）：\n"""\n${outlineTxt.slice(0, 6000)}\n"""\n\n` : ''}歌词：\n${lyricBlock}\n\n` +
+          `请据此定 1~2 个最合适的场景（名字写成「地点+时间」），每个按规范写 description（地点、时间、光线、色调、氛围、前景/中景/后景层次）。` +
+          `只输出 JSON：{"scenes":[{"name":"","description":""}]}`, 3000, project.textConfigId))
+        if (Array.isArray(fix?.scenes) && fix.scenes.length) out.scenes = fix.scenes
+      } catch (e: any) {
+        logTaskError('MV', 'extract-scene-fallback', { id, error: e?.message })
+      }
+    }
+    if (!Array.isArray(out.scenes) || !out.scenes.length) {
+      return serverError(c, '场景没提取出来（模型只给了人物）。把分镜提示词里的地点写具体一点，或再点一次「提取人物和场景」。')
+    }
     const ts = now()
     await db.delete(schema.mvAssets).where(eq(schema.mvAssets.projectId, id))
     let sort = 0
     for (const kind of KINDS) {
-      const list = (kind === 'character' ? out.characters : out.scenes) || []
+      const list = (kind === 'character' ? out.characters : kind === 'prop' ? (out as any).props : out.scenes) || []
       for (const a of list) {
         const desc = String(a?.description || '').trim()
         const name = String(a?.name || '').trim()
@@ -968,7 +1050,7 @@ appearance 只写脸/身形容貌，styling 只写服装配饰；拆不出来就
           seriesId: Number((project as any)?.seriesId) || null,
           projectId: id,
           kind,
-          name: name.slice(0, 60) || (kind === 'character' ? `人物${sort + 1}` : `场景${sort + 1}`),
+          name: name.slice(0, 60) || (kind === 'character' ? `人物${sort + 1}` : kind === 'prop' ? `道具${sort + 1}` : `场景${sort + 1}`),
           description: desc.slice(0, 4000),
           appearance: String(a?.appearance || '').slice(0, 2000),
           styling: String(a?.styling || '').slice(0, 2000),
@@ -1034,7 +1116,7 @@ app.delete('/projects/:id/assets/:aid', async (c) => {
 /** 资产提示词规则：直接用短剧的那两份 skill（人物板 / 场景），读不到才回退 MV 自己的指令 */
 async function assetRule(kind: string): Promise<string> {
   // 2026-10-19：MV 只读**自己那份**（skills/mv/*），不再借短剧的 prompt-generator（用户要求两边彻底隔离）
-  const own = readSkillFile(kind === 'character' ? 'mv/character-prompt' : 'mv/scene-prompt')
+  const own = readSkillFile(kind === 'character' ? 'mv/character-prompt' : kind === 'prop' ? 'mv/prop-prompt' : 'mv/scene-prompt')
   return own || (await mvPrompt('mv_asset_image'))
 }
 
@@ -1107,7 +1189,9 @@ app.post('/projects/:id/assets/:aid/prompt', async (c) => {
  */
 const CHAR_BOARD_SIZE = '2048x1152'
 const imageSizeForAsset = (project: any, kind: string): string =>
-  kind === 'character' ? CHAR_BOARD_SIZE : imageSizeForAspect(project?.aspectRatio)
+  kind === 'character' ? CHAR_BOARD_SIZE
+    : kind === 'prop' ? '1024x1024'          // 道具 = 白底单品，方形（字更清楚，2026-10-20 用户拍板）
+      : imageSizeForAspect(project?.aspectRatio)
 
 /**
  * 成片画幅：H3 只认 9:16 / 16:9，其它比例按横竖就近映射。
@@ -1201,7 +1285,12 @@ app.post('/projects/:id/assets/:aid/image', async (c) => {
       updatedAt: now(),
     }).where(eq(schema.mvAssets.id, aid))
   }
-  const assetPrompt = String(body.prompt ?? asset.prompt ?? '').trim()
+  const assetPromptRaw = String(body.prompt ?? asset.prompt ?? '').trim()
+  // 2026-10-20 用户报「侧面格还是出头」：老提示词里写着「鼻尖朝画面左边」——朝向里带五官词，
+  // 模型就把那一格的头画出来了。这里机械替换成纯朝向（幂等，老卡「重绘」也能修好）。
+  const assetPrompt = assetPromptRaw
+    .replace(/鼻尖朝画面左(?:边|侧)?/g, '身体侧身 90 度，对着画面左侧')
+    .replace(/鼻尖朝左/g, '身体侧身 90 度，对着画面左侧')
   if (!assetPrompt) return badRequest(c, '先点「生成提示词」，再出图')
   if (body.prompt !== undefined && assetPrompt !== asset.prompt) {
     await db.update(schema.mvAssets).set({ prompt: assetPrompt.slice(0, 4000), updatedAt: now() })
@@ -1413,7 +1502,7 @@ ${project.lyrics ? `\n歌词（行，时间未知）：\n${String(project.lyrics
   }
 })
 
-/** 详细分镜：4080 按能量/句界切硬时间轴（H3 帧网格），MV 侧按镜头语言配景别/机位/歌词 */
+/** 详细分镜：服务器按能量/句界切硬时间轴（H3 帧网格），MV 侧按镜头语言配景别/机位/歌词 */
 app.post('/projects/:id/shots', async (c) => {
   const id = Number(c.req.param('id'))
   const project = await loadProject(id)
@@ -1422,7 +1511,7 @@ app.post('/projects/:id/shots', async (c) => {
   if (!project.vocalStem) return badRequest(c, '先点顶栏「人声分离」—— 分镜的唱/非唱要用人声轨判断')
   const body = await c.req.json().catch(() => ({} as any))
   const maxS = Math.min(HARD_MAX_S, Number(body.max_seconds || project.maxShotSeconds) || DEFAULT_MAX_S)
-  // 到这一步才第一次把原曲转 32k 送 4080（建项目时不碰它）
+  // 到这一步才第一次把原曲转 32k 送 服务器（建项目时不碰它）
   let remoteSong = ''
   try {
     remoteSong = await ensureRemoteSong(project)
@@ -1430,7 +1519,7 @@ app.post('/projects/:id/shots', async (c) => {
     return serverError(c, `原曲上传失败：${err?.message || err}`)
   }
   // 有对轴时间轴就把「每句起点」当候选切点传下去：切点落在句界，唱词不会被腰斩。
-  // 段长口径 5.2~8s、目标 7s（实测：一句一段平均只有 4.69s，29 句里 20 句短于 4080 的 5.167s 下限）。
+  // 段长口径 5.2~8s、目标 7s（实测：一句一段平均只有 4.69s，29 句里 20 句短于 服务器的 5.167s 下限）。
   const shotLines = parseLrcLines(String(project.lyricLrc || ''), Number(project.songSeconds) || 0)
   const useLineCuts = shotLines.length >= 3
   const cutMax = useLineCuts ? Math.min(maxS, 8) : maxS
@@ -1446,6 +1535,28 @@ app.post('/projects/:id/shots', async (c) => {
   }
   const raw = plan?.shots || []
   if (!raw.length) return serverError(c, '切段结果为空')
+  // 2026-10-20 用户报「提取了两张场景，但没有任何分镜用到其中一张」：
+  // 以前每段的参考图默认只有「第一个人物 + 第一个场景」，第二张场景永远用不上。
+  // 现在按时间把场景铺开（第 k 段落在哪个场景窗口就绑哪个），角色默认第一个，写进 ref_ids。
+  const shotAssets = await assetsOf(id)
+  const charDefault = shotAssets.find((a) => a.kind === 'character') || null
+  const sceneList = shotAssets.filter((a) => a.kind === 'scene')
+  const totalForScene = Number((plan as any)?.total_seconds) || Number(project.songSeconds) || 0
+  const propList = shotAssets.filter((a) => a.kind === 'prop' && String(a.name || '').trim())
+  const squash = (t: any) => String(t || '').replace(/\s+/g, '')
+  const propKeys = propNameKeys
+  /** 这一段提到哪几个道具就绑哪几个（最多 2 个，按道具库顺序）——分镜文字里没提的绝不绑 */
+  const propsInText = (text: string) => {
+    const t = squash(text)
+    if (!t) return [] as any[]
+    return propList.filter((a) => propKeys(a.name).some((k) => t.includes(k))).slice(0, 2)
+  }
+  const sceneAt = (start: number) => {
+    if (!sceneList.length) return null
+    if (sceneList.length === 1 || !totalForScene) return sceneList[0]
+    const idx = Math.min(sceneList.length - 1, Math.max(0, Math.floor((start / totalForScene) * sceneList.length)))
+    return sceneList[idx]
+  }
   // 景别按 MV 分镜规范定（由模型按歌词情绪/音乐节奏选），这里只留兜底：有唱默认近景、间奏默认中景、首尾可中远景
   const SIZES = ['中远景', '中景', '近景', '特写']
   const fallbackSize = (i: number, n: number, vocal: string) =>
@@ -1496,9 +1607,9 @@ ${useLineCuts
     const CYCLE = [0, 2, 0, 3, 1, 3]
     let cyc = 0
     let prevPrevLv = -99
-    const pickFar = (want: number, prev: number) => {
-      // 合格 = 跨两档，且不是 A→B→A 来回弹（弹来弹去等于只有两种景别）
-      const ok = (lv: number) => Math.abs(lv - prev) >= 2 && lv !== prevPrevLv
+    const pickFar = (want: number, prev: number, minLv = 0) => {
+      // 合格 = 跨两档，且不是 A→B→A 来回弹（弹来弹去等于只有两种景别），且不低于 minLv
+      const ok = (lv: number) => Math.abs(lv - prev) >= 2 && lv !== prevPrevLv && lv >= minLv
       if (ok(want)) {
         const at = CYCLE.indexOf(want)
         cyc = at >= 0 ? (at + 1) % CYCLE.length : cyc
@@ -1508,23 +1619,63 @@ ${useLineCuts
         const c = CYCLE[(cyc + k) % CYCLE.length]
         if (ok(c)) { cyc = (cyc + k + 1) % CYCLE.length; return c }
       }
-      // 放宽一轮：只要求跨两档（宁可 A→B→A，也不能只差一档）
-      for (const c of [0, 1, 2, 3]) if (Math.abs(c - prev) >= 2 && c !== want) return c
+      // 放宽「跨两档」：仍必须满足 minLv（上段拉远 ⇒ 本段不能回中远景/中景），挑与上段差得最远的。
+      // 注：上段是特写+拉远时，「跨两档」与「拉远后不许回中远景/中景」天然冲突（无解）——
+      // 此时以「拉远后不许回中远景/中景」为准（用户 2026-10-21 定的硬规则），跨两档让步。
+      if (minLv > 0) {
+        const allowed = [0, 1, 2, 3].filter((c) => c >= minLv && c !== want)
+        if (allowed.length) {
+          const best = allowed.sort((a, b) => Math.abs(b - prev) - Math.abs(a - prev))[0]
+          const at = CYCLE.indexOf(best)
+          cyc = at >= 0 ? (at + 1) % CYCLE.length : cyc
+          return best
+        }
+      } else {
+        // 放宽一轮：只要求跨两档（宁可 A→B→A，也不能只差一档）
+        for (const c of [0, 1, 2, 3]) if (Math.abs(c - prev) >= 2 && c !== want) return c
+      }
       return want
     }
     let prevLv = -99
     let lastActClass = ''
+    // 2026-10-21 用户口径：「上一段末拍是**逐渐拉远**时，下一段不能是中远景/中景」——
+    // 拉远后画面已经退到远景，下一段又切回中远景/中景 ⇒ 视觉上「跳一下」。
+    // 反过来「上一段是逐渐推进」时，下一段可以回到中远景/中景（观众刚被推进，再拉开是顺的）。
+    // 判据取**上一段最后一拍的机位**（拉远/推近写在那儿），不是整段。
+    const endsWithPull = (cam: string) => /拉远|后拉|后退|拉走|zoom\s*out|pull\s*(back|out)|dolly\s*out/i.test(String(cam || ''))
+    let prevEndCam = ''
     for (let i = 0; i < raw.length; i++) {
       const s = raw[i]
       const extra = (Array.isArray(perShot) ? perShot : []).find((x: any) => Number(x?.index) === i) || {}
       let prevActClass = i > 0 ? (lastActClass || '') : ''
       let sizeEff = SIZES.includes(String(extra?.shot_size || '')) ? String(extra.shot_size) : (sizes[i] || '中景')
       let lv = SIZE_LV[sizeEff] ?? 1
-      if (i > 0) lv = pickFar(lv, prevLv)
+      if (i > 0) {
+        // 上段末拍在拉远 → 本段不许落在「中远景/中景」（档位 0/1），必须 ≥2（近景/特写）
+        const minLv = endsWithPull(prevEndCam) ? 2 : 0
+        lv = pickFar(lv, prevLv, minLv)
+      }
       sizeEff = LV_SIZE[lv]
       prevPrevLv = prevLv
       prevLv = lv
       const bet = fitBeats(extra?.beats, Number(s.seconds) || 5.167, sizeEff, String(extra?.camera || ''), i + 1, String(s.vocal_state || '') === 'vocal_active', prevActClass)
+      // 记下本段最后一拍的机位，给下一段判断用
+      prevEndCam = String(bet[bet.length - 1]?.camera || extra?.camera || '')
+      const scenePick = sceneAt(Number(s.start) || 0)
+      const segStart = Number(s.start) || 0
+      const segEnd = Number(s.end) || segStart
+      const segWhat = (() => {
+        try {
+          return outlineForWindow(JSON.parse(String(project.outline || '[]')) as any[], segStart, segEnd)
+            .map((o: any) => String(o.what || '')).join(' ')
+        } catch { return '' }
+      })()
+      const segLyric = useLineCuts
+        ? lyricsInWindow(shotLines, segStart, segEnd).join(' ')
+        : String(extra?.lyric || '')
+      const propsHere = propsInText([segWhat, segLyric, String(extra?.prompt_extra || '')].join(' '))
+      // 顺序保持「人物 → 场景 → 道具」（老段没有道具，编号不变）；道具排在最后与短剧一致
+      const refIds = [charDefault?.id, scenePick?.id, ...propsHere.map((a: any) => a.id)].filter(Boolean)
       await db.insert(schema.mvShots).values({
         projectId: id, shotNumber: i + 1,
         startSeconds: Number(s.start), endSeconds: Number(s.end),
@@ -1538,12 +1689,21 @@ ${useLineCuts
           ? lyricsInWindow(shotLines, Number(s.start), Number(s.end)).join(' / ')
           : String(extra?.lyric || '')).slice(0, 300),
         status: 'pending', createdAt: ts, updatedAt: ts,
+        refIds: refIds.length ? JSON.stringify(refIds) : null,
       })
       lastActClass = actClass(bet[0]?.action || '')
     }
     await db.update(schema.mvProjects).set({ status: 'shots', maxShotSeconds: maxS, updatedAt: ts }).where(eq(schema.mvProjects.id, id))
-    logTaskSuccess('MV', 'shots', { id, count: raw.length, maxS })
-    return success(c, { count: raw.length, max_seconds: maxS, grid: plan.grid || [], shots: await shotsOf(id) })
+    // 2026-10-21 用户要求：**拆分完就把道具绑好**（不用再点「重新绑道具」）
+    let boundProps = 0
+    try {
+      const madeShots = await shotsOf(id)
+      boundProps = (await bindPropsToShots({ ...project, outline: JSON.stringify(outline) }, madeShots)).touched
+    } catch (e: any) {
+      logTaskError('MV', 'shots-bind-props', { id, error: e?.message })
+    }
+    logTaskSuccess('MV', 'shots', { id, count: raw.length, maxS, boundProps })
+    return success(c, { count: raw.length, max_seconds: maxS, grid: plan.grid || [], bound_props: boundProps, shots: await shotsOf(id) })
   } catch (err: any) {
     logTaskError('MV', 'shots', { id, error: err?.message })
     return serverError(c, err?.message || '写分镜表失败')
@@ -1577,6 +1737,62 @@ app.post('/projects/:id/shots/:sid/cancel', async (c) => {
   return success(c, { id: sid, canceled_tasks: killed, shots: await shotsOf(id) })
 })
 
+/** 按名字 + 一次模型判定，把道具绑到给定分镜上（只动道具那部分，人物/场景保持原样）。
+ *  拆分分镜后会自动调它（2026-10-21 用户要求「拆分时就绑好」），也可由按钮重跑。 */
+async function bindPropsToShots(project: any, shots: any[]): Promise<{ touched: number; props: number }> {
+  const id = Number(project?.id)
+  const allA = await assetsOf(id)
+  const props = allA.filter((a) => a.kind === 'prop')
+  if (!props.length || !shots.length) return { touched: 0, props: props.length }
+  const propIds = new Set(props.map((a) => a.id))
+  const ready = props.filter((a) => a.image)          // 有图才绑（没图绑了也没参考图）
+  if (!ready.length) return { touched: 0, props: props.length }
+  let outline: any[] = []
+  try { outline = JSON.parse(String(project.outline || '[]')) } catch { outline = [] }
+  const whatOf = (s: any) => outline
+    .filter((o: any) => Number(o?.end) > Number(s.startSeconds || 0) && Number(o?.start) < Number(s.endSeconds || 0))
+    .map((o: any) => String(o.what || '')).join(' ')
+  const hitMap = new Map<number, number[]>()
+  for (const s of shots) {
+    const txt = String([s.lyric, whatOf(s)].join(' ')).replace(/\s+/g, '')
+    hitMap.set(s.id, ready.filter((a) => propNameKeys(a.name).some((k) => txt.includes(k))).slice(0, 2).map((a) => a.id))
+  }
+  // 名字对不上的（歌词写「宵夜」、道具叫「外卖保温袋」）交给模型判一次：有界 1 次调用
+  const needAI = shots.filter((s) => !(hitMap.get(s.id) || []).length)
+  if (needAI.length && ready.length) {
+    try {
+      const propList2 = ready.map((a, i) => `${i + 1}. ${a.name} —— ${String(a.description || '').slice(0, 80)}`).join('\n')
+      const segList = needAI.map((s) => `第${s.shotNumber}段：${String([whatOf(s), s.lyric].filter(Boolean).join(' ')).slice(0, 140)}`).join('\n')
+      const raw = await askText(await mvPrompt('mv_prop_map'),
+        `下面是这支 MV 的道具清单和分镜段落。判断**每一段画面里真的出现/被使用时**是哪些道具（没出现就别填，宁缺勿滥，每段最多 2 个）。\n\n` +
+        `道具清单：\n${propList2}\n\n分镜段落（只列需要判断的）：\n${segList}\n\n` +
+        `只输出 JSON：{"segments":[{"n":段号,"props":[道具序号]}]}`, 1500, project.textConfigId)
+      const got = pickJson<{ segments?: any[] }>(raw)?.segments || []
+      for (const it of got) {
+        const s = needAI.find((x: any) => Number(x.shotNumber) === Number(it?.n))
+        if (!s) continue
+        const ids = (Array.isArray(it?.props) ? it.props : []).map((k: any) => ready[Number(k) - 1]?.id).filter(Boolean).slice(0, 2)
+        if (ids.length) hitMap.set(s.id, ids as number[])
+      }
+    } catch (e: any) {
+      logTaskError('MV', 'shots-bind-props-ai', { id, error: e?.message })
+    }
+  }
+  let touched = 0
+  for (const s of shots) {
+    let ids: number[] = []
+    try { ids = JSON.parse(String(s.refIds || '[]')).map(Number).filter(Boolean) } catch { ids = [] }
+    const keep = ids.filter((x) => !propIds.has(x))
+    const next = [...keep, ...(hitMap.get(s.id) || [])]
+    if (JSON.stringify(next) !== JSON.stringify(ids)) {
+      await db.update(schema.mvShots).set({ refIds: next.length ? JSON.stringify(next) : null, updatedAt: now() })
+        .where(eq(schema.mvShots.id, s.id))
+      touched++
+    }
+  }
+  return { touched, props: ready.length }
+}
+
 /** 手改单段（景别/机位/歌词/提示词） */
 app.put('/projects/:id/shots/:sid', async (c) => {
   const id = Number(c.req.param('id'))
@@ -1595,11 +1811,15 @@ app.put('/projects/:id/shots/:sid', async (c) => {
     patch.videoUrl = String(body.video_url ?? body.videoUrl) || null
   }
   if (body.prompt !== undefined) patch.prompt = String(body.prompt)
+  // 2026-10-21：以前漏了这两个 —— 前端打了字、PUT 静默丢弃 → 轮询一刷新就"自动清空"
+  if (body.prompt_extra !== undefined) patch.promptExtra = String(body.prompt_extra || '').slice(0, 1200)
+  if (body.ref_ids !== undefined) patch.refIds = JSON.stringify(
+    (Array.isArray(body.ref_ids) ? body.ref_ids : []).map(Number).filter(Boolean)).slice(0, 4000)
   await db.update(schema.mvShots).set(patch).where(eq(schema.mvShots.id, sid))
   return success(c, { id: sid })
 })
 
-/** 编译六段式提示词（4080 侧编译 + 硬校验，一条不过整批不发） */
+/** 编译六段式提示词（服务器侧编译 + 硬校验，一条不过整批不发） */
 app.post('/projects/:id/prompts', async (c) => {
   const id = Number(c.req.param('id'))
   const project = await loadProject(id)
@@ -1688,9 +1908,32 @@ app.post('/projects/:id/outline', async (c) => {
 app.get('/projects/:id/shots/:sid/prompt-progress', async (c) => {
   const sid = Number(c.req.param('sid'))
   const p = shotPromptProgress.get(sid)
-  if (!p) return success(c, { step: 0, total: 4, label: '等待开始', done: false, age: 0 })
+  if (!p) return success(c, { step: 0, total: 8, label: '等待开始', done: false, age: 0 })
   return success(c, { step: p.step, total: p.total, label: p.label, done: p.done, age: Date.now() - p.at })
 })
+
+/** 本地机械体检：查 服务器那套没覆盖、但我们真踩过的坑（只读，不改动任何内容） */
+function localPromptProblems(shot: any): string[] {
+  const en = String(shot?.promptEn || '')
+  const out: string[] = []
+  if (!en.trim()) return out
+  const det = (en.split(/^detailed_description:\s*$/m)[1] || '').split(/^overall_soundscape:/m)[0]
+  if (/^\s*<(?:Subject \d+|Audio 1)>\s+is the supplied song excerpt/im.test(det)) {
+    out.push('音频声明混进了 detailed_description（只能出现在 subject_definitions）')
+  }
+  const ret = (en.split(/^retention_analysis:\s*$/m)[1] || '').split(/^detailed_description:/m)[0]
+  if (/<Subject \d+>/.test(ret) && !/\(appears in \[Shot \d+\]\)/.test(ret)) {
+    out.push('retention_analysis 缺 (appears in [Shot N]) 标注')
+  }
+  const vocal = String(shot?.vocalState || '') === 'vocal_active'
+  if (vocal && !/lead singer/i.test(en)) out.push('唱段缺「只有 <Subject 1> 唱」的 lead singer 句')
+  if (vocal && !/only <Subject 1>'s lips/i.test(en)) out.push('唱段没点名只有 <Subject 1> 对嘴')
+  if (!vocal && !/Nobody sings/i.test(en)) out.push('非唱段缺「谁都不唱」声明')
+  if (/<d>|<\/d>/.test(en)) out.push('出现 <d> 台词块（MV 不许写台词/歌词）')
+  const banned = [...new Set((en.match(/\b(?:screen|screens|phone|phones|smartphone|tablet|mirror|mirrors|reflection|reflections|projection|poster|portrait|painting|photograph|crowd|television|clone|duplicate|ghost)\b/gi) || []).map((x) => x.toLowerCase()))]
+  if (banned.length) out.push(`含禁区词：${banned.slice(0, 4).join(', ')}`)
+  return out
+}
 
 /** 单段体检 */
 app.post('/projects/:id/shots/:sid/check', async (c) => {
@@ -1707,7 +1950,8 @@ app.post('/projects/:id/shots/:sid/check', async (c) => {
       shots: [{ prompt: shot.promptEn || '', vocal_state: shot.vocalState || 'vocal_active' }],
     })
     const row = out?.rows?.[0] || { ok: false, problems: ['体检无返回'] }
-    return success(c, { shotNumber: shot.shotNumber, ok: !!row.ok, problems: row.problems || [] })
+    const problems = [...(row.problems || []), ...localPromptProblems(shot)]
+    return success(c, { shotNumber: shot.shotNumber, ok: !problems.length, problems })
   } catch (err: any) {
     logTaskError('MV', 'shot-check', { id, sid, error: err?.message })
     return serverError(c, err?.message || '体检失败')
@@ -1755,7 +1999,7 @@ app.post('/projects/:id/upscale', async (c) => {
   return success(c, { output_url: outRel, seconds: Number(dim.dur || 0) })
 })
 
-/** 歌词自动对轴：把纯歌词 + 人声轨送到 4080 跑 Whisper，回传 LRC（存在项目上，合成时烧字幕） */
+/** 歌词自动对轴：把纯歌词 + 人声轨送到 服务器跑 Whisper，回传 LRC（存在项目上，合成时烧字幕） */
 app.post('/projects/:id/align', async (c) => {
   const id = Number(c.req.param('id'))
   const project = await loadProject(id)
@@ -1764,18 +2008,67 @@ app.post('/projects/:id/align', async (c) => {
   const lyrics = String(project.lyrics || '').trim()
   if (!lyrics) return badRequest(c, '先把歌词填进「原始内容」的歌词框')
   try {
-    const out = await shimPost<{ lrc: string; lines?: number; unmatched?: number; cover?: number; seconds?: number }>(
-      '/v2/mv/align', { audio_file: project.vocalStem, lyrics, tag: `p${id}` },
+    const b: any = await c.req.json().catch(() => ({}))
+    // 兼容旧版前端（不传 job）：直接同步对轴并返回 lrc。
+    // 新前端传 job:true → 走异步任务，显卡被占用时排队、界面显示「排队中」。
+    if (!b?.job) {
+      const out = await shimPost<{ lrc: string; lines?: number; unmatched?: number; cover?: number; seconds?: number }>(
+        '/v2/mv/align', { audio_file: project.vocalStem, lyrics, tag: `p${id}` },
+      )
+      const lrc = String(out?.lrc || '')
+      if (!lrc.trim()) throw new Error('对轴没有返回时间轴')
+      await db.update(schema.mvProjects).set({ lyricLrc: lrc, updatedAt: now() }).where(eq(schema.mvProjects.id, id))
+      logTaskSuccess('MV', 'align', { id, lines: out?.lines, cover: out?.cover })
+      return success(c, { lrc, lines: out?.lines || 0, unmatched: out?.unmatched || 0, cover: out?.cover || 0, cached: Number(out?.seconds || 0) === 0 })
+    }
+    // 2026-10-21：改成异步 job —— 显卡被视频任务占用时服务器会排队，前端要能看到「排队中」
+    const out = await shimPost<{ job_id?: string; state?: string; message?: string; lrc?: string; lines?: number; unmatched?: number; seconds?: number }>(
+      '/v2/mv/align', { audio_file: project.vocalStem, lyrics, tag: `p${id}`, job: true },
     )
-    const lrc = String(out?.lrc || '')
-    if (!lrc.trim()) throw new Error('对轴没有返回时间轴')
-    await db.update(schema.mvProjects).set({ lyricLrc: lrc, updatedAt: now() }).where(eq(schema.mvProjects.id, id))
-    logTaskSuccess('MV', 'align', { id, lines: out?.lines, cover: out?.cover })
-    // 4080 侧同歌词同音轨直接吃缓存（seconds = 0）→ 前端显示「缓存」，别让人以为没跑
-    return success(c, { lrc, lines: out?.lines || 0, unmatched: out?.unmatched || 0, cover: out?.cover || 0, cached: Number(out?.seconds || 0) === 0 })
+    const jobId = String(out?.job_id || '')
+    if (!jobId) throw new Error('服务器没有返回对轴任务号')
+    logTaskStart('MV', 'align', { id, job: jobId })
+    // 服务器缓存命中时直接回 lrc（不再让前端绕一圈轮询）→ 这里就落库
+    const lrc0 = String(out?.lrc || '')
+    if (out?.state === 'done' && lrc0.trim()) {
+      await db.update(schema.mvProjects).set({ lyricLrc: lrc0, updatedAt: now() }).where(eq(schema.mvProjects.id, id))
+      logTaskSuccess('MV', 'align', { id, lines: out?.lines })
+      return success(c, { job_id: jobId, state: 'done', lrc: lrc0, lines: out?.lines || 0, unmatched: out?.unmatched || 0, seconds: out?.seconds || 0 })
+    }
+    return success(c, { job_id: jobId, state: out?.state || 'queued', message: out?.message || '' })
   } catch (err: any) {
     logTaskError('MV', 'align', { id, error: err?.message })
     return serverError(c, err?.message || '对轴失败')
+  }
+})
+
+/** 对轴进度轮询：排队中 / 对轴中 / 完成（完成时才落库） */
+app.post('/projects/:id/align/status', async (c) => {
+  const id = Number(c.req.param('id'))
+  const project = await loadProject(id)
+  if (!project) return notFound(c, 'MV 项目不存在')
+  const b: any = await c.req.json().catch(() => ({}))
+  const jobId = String(b?.job_id || '')
+  if (!jobId) return badRequest(c, '缺 job_id')
+  try {
+    const out = await shimPost<{ state?: string; message?: string; lrc?: string; lines?: number; unmatched?: number; seconds?: number; error?: string }>(
+      '/v2/mv/align/status', { job_id: jobId },
+    )
+    const state = String(out?.state || 'queued')
+    if (state === 'done') {
+      const lrc = String(out?.lrc || '')
+      if (!lrc.trim()) throw new Error('对轴没有返回时间轴')
+      await db.update(schema.mvProjects).set({ lyricLrc: lrc, updatedAt: now() }).where(eq(schema.mvProjects.id, id))
+      logTaskSuccess('MV', 'align', { id, lines: out?.lines })
+      return success(c, { state: 'done', lrc, lines: out?.lines || 0, unmatched: out?.unmatched || 0, seconds: out?.seconds || 0 })
+    }
+    if (state === 'failed') {
+      logTaskError('MV', 'align', { id, error: out?.error })
+      return success(c, { state: 'failed', error: String(out?.error || '对轴失败') })
+    }
+    return success(c, { state, message: String(out?.message || '') })
+  } catch (err: any) {
+    return serverError(c, err?.message || '查询对轴状态失败')
   }
 })
 
@@ -1829,14 +2122,18 @@ app.post('/projects/:id/check', async (c) => {
     })
     const rows = (out?.rows || []).map((r: any, i: number) => {
       const noEn = !String(shots[i]?.promptEn || '').trim()
+      const problems = noEn
+        ? ['这一段的英文提示词还没生成 —— 点「编译全部提示词」或该段的「AI 生成」']
+        : [...(r.problems || []), ...localPromptProblems(shots[i])]
       return {
         shotNumber: shots[i]?.shotNumber ?? i + 1,
-        ok: noEn ? false : !!r.ok,
-        problems: noEn ? ['这一段的英文提示词还没生成 —— 点「编译全部提示词」或该段的「AI 生成」'] : (r.problems || []),
+        ok: !noEn && !!r.ok && !localPromptProblems(shots[i]).length,
+        problems,
       }
     })
-    logTaskSuccess('MV', 'check', { id, ok: out?.ok, bad: out?.bad })
-    return success(c, { ok: out?.ok || 0, bad: out?.bad || 0, rows })
+    const okN = rows.filter((x) => x.ok).length
+    logTaskSuccess('MV', 'check', { id, ok: okN, bad: rows.length - okN })
+    return success(c, { ok: okN, bad: rows.length - okN, rows })
   } catch (err: any) {
     logTaskError('MV', 'check', { id, error: err?.message })
     return serverError(c, err?.message || '体检失败')
@@ -2104,4 +2401,4 @@ app.post('/projects/:id/assemble', async (c) => {
 })
 
 export default app
-export { parseLrcLines, planSegmentsByLines, lyricsInWindow, salvageWhat }   // 给自检脚本用
+export { parseLrcLines, planSegmentsByLines, lyricsInWindow, salvageWhat, localPromptProblems, propNameKeys }   // 给自检脚本用

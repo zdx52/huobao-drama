@@ -2,10 +2,10 @@
  * 角色声音（voice）服务 —— 2026-10-11 用户拍板 B：**直出 32k 源 wav，不再抽 refmod 声音卡**
  *
  * 流程：「生成声音」= 底样本(必选) + 音色描述(可选)
- *   → 4080 中转 POST /v2/tts/voice 出 wav（CosyVoice，一次性进程，不常驻；**已在 TTS 源头重采样成 32kHz**）
+ *   → 服务器中转 POST /v2/tts/voice 出 wav（CosyVoice，一次性进程，不常驻；**已在 TTS 源头重采样成 32kHz**）
  *   → wav 落 Mac 主副本 <data>/voices/<name>.wav，参数落 <same>.json
  * 生成视频时：这些 wav 以 `voice_wav_files` **单独下发**（不混进图片卡 refmod_files）；
- *   4080 落盘为 voice_<name>.wav(32k) → 接官方 ref_audios + audio_vae → 提示词补 <Audio j>。
+ *   服务器落盘为 voice_<name>.wav(32k) → 接官方 ref_audios + audio_vae → 提示词补 <Audio j>。
  *
  * ⚠️ 背景（为什么卡废了）：旧的 refmod 声音卡（.safetensors）路径经实测**对音色无效**
  *   （节点包作者 README 亦明写 "Treat voice cloning as not working"）。
@@ -192,21 +192,21 @@ export function voiceStatus(id: number): {
 /** 在抽中的任务（App 重启即丢；状态查询把它与文件状态合并） */
 const pending = new Map<string, Promise<{ name: string; size: number }>>()
 
-/** 取 4080 中转地址（现役视频配置的 baseUrl；App 配的是裸地址） */
+/** 取 服务器中转地址（现役视频配置的 baseUrl；App 配的是裸地址） */
 async function shimBase(): Promise<string> {
   const cfg = await getActiveConfig('video')
   const base = String(cfg?.baseUrl || '').trim().replace(/\/+$/, '')
-  if (!base) throw new Error('没有可用的视频服务配置，拿不到 4080 中转地址')
+  if (!base) throw new Error('没有可用的视频服务配置，拿不到 服务器中转地址')
   return base
 }
 
 /**
- * 调 4080 TTS，返回 { wav, seconds }。
+ * 调 服务器 TTS，返回 { wav, seconds }。
  *
  * ⚠️ 2026-10-08 修的坑：原来把 `base` 字段塞成中转网址（`{base: shimUrl}`），
- * 而 4080 的 `base` 是「底样本文件名」语义 → 匹配不到 → **静默回落到 CosyVoice 自带女声底**，
+ * 而 服务器的 `base` 是「底样本文件名」语义 → 匹配不到 → **静默回落到 CosyVoice 自带女声底**，
  * 用户选的底一次也没生效（男角色拿到女声底）。现在改为**上传底样本本体**（base_wav, base64），
- * 不依赖 4080 本地目录里是否有同 id 的文件；底不存在才退回按 id 找。
+ * 不依赖 服务器本地目录里是否有同 id 的文件；底不存在才退回按 id 找。
  */
 async function callTts(
   shimUrl: string,
@@ -309,7 +309,7 @@ export async function extractVoiceCard(
 }
 
 /**
- * 取这些角色的**源 wav**（下发给 4080 当官方 ref_audios 参考音频，2026-10-11 起）。
+ * 取这些角色的**源 wav**（下发给 服务器当官方 ref_audios 参考音频，2026-10-11 起）。
  * 缺 wav → **抛错中止**（与图片卡同一纪律：绝不静默降级出一版没带声音的片子）。
  */
 export async function voiceCardsForCharacters(

@@ -334,7 +334,7 @@ export const sqliteSchemaStatements = [
     title TEXT,
     idea TEXT,                    -- 用户写的 MV 想法（一句话/一段梗概）
     song_file TEXT,               -- 本地 32k wav（static/ 相对路径）
-    song_remote_name TEXT,        -- 4080 ComfyUI/input 下的文件名（H3 读取用）
+    song_remote_name TEXT,        -- 服务器 ComfyUI/input 下的文件名（H3 读取用）
     song_seconds REAL DEFAULT 0,
     lyrics TEXT,                  -- 可选歌词（切点落在句界用）
     aspect_ratio TEXT DEFAULT '9:16',  -- 画幅（人物板固定 16:9；场景图与成片按它）

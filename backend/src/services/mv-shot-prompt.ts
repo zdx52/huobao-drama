@@ -119,7 +119,8 @@ const fixRetentionFormat = (en: string, retention: string) => {
   const blocks = det.split(/(?=\[Shot \d+\])/).filter((b) => /^\s*\[Shot \d+\]/.test(b))
   const shotsOf = (k: string) => blocks.map((b, i) => (b.includes(`<Subject ${k}>`) ? i + 1 : 0)).filter(Boolean)
   return retention.split('\n').map((line) => {
-    const m = line.match(/^\s*<Subject (\d+)>\s*(\([^)]*\))?\s*:\s*(.*)$/)
+    // 模型常写成 `<Subject 1> fully_preserved — …`（没有冒号、没有 appears in）→ 也要能重排
+    const m = line.match(/^\s*<Subject (\d+)>\s*(\([^)]*\))?\s*[:：\-—–]?\s*(.*)$/)
     if (!m) return line
     const k = m[1]
     // 一律按正文重算（模型常写成 `(appears in Shot 1)` 少方括号，官方要求 `(appears in [Shot 1])`）
@@ -135,10 +136,42 @@ const summaryBad = (summary: string) =>
   !/<Subject \d+>/.test(summary) || (summary.match(SUMMARY_STYLE) || [])[0] || ''
 
 
-/** 4080 体检的禁词表（命中即拒收） */
+/** 服务器体检的禁词表（命中即拒收） */
 const BANNED_RE = /\b(?:screen|screens|phone|phones|smartphone|tablet|mirror|mirrors|reflection|reflections|projection|projections|poster|posters|portrait|portraits|painting|paintings|photograph|photographs|photo|photos|crowd|television|clone|duplicate|ghost)\b/gi
 
 /** 机械洗掉常见命中（2026-10-19 实测：模型爱写 "reads on screen from the first frame" → 体检报「危险词: screen」） */
+/** 中→英景别固定译法（模型爱把「近景」写成 close-up，中英就打架了） */
+const SIZE_EN: Record<string, string> = {
+  大特写: 'extreme close-up', 特写: 'close-up', 近景: 'medium close-up',
+  中景: 'medium shot', 中远景: 'medium wide shot', 远景: 'wide shot', 全景: 'full shot',
+}
+const SIZE_EN_RE = /extreme close-up|medium close-up|medium wide shot|close-up|medium shot|wide shot|full shot/i
+
+/**
+ * 英文稿景别机械对齐：detailed_description 里第 N 块的**首句**景别，强制改成中文第 N 拍的景别。
+ * 只动首句、只动第一个景别词 —— 正文里的 "close-up of her hand" 之类不碰。
+ */
+function alignShotSizes(en: string, sizes: string[]): string {
+  const i = en.indexOf('detailed_description:')
+  if (i < 0 || !sizes.some((s) => SIZE_EN[s])) return en
+  const rest = en.slice(i)
+  const nxt = rest.search(/\n(overall_soundscape|non_diegetic_music)\s*:/)
+  const body = nxt >= 0 ? rest.slice(0, nxt) : rest
+  const tail = nxt >= 0 ? rest.slice(nxt) : ''
+  let k = 0
+  const fixedBody = body.replace(/\[Shot\s+\d+\][\s\S]*?(?=\[Shot\s+\d+\]|$)/g, (blk) => {
+    const want = SIZE_EN[sizes[k] ?? ''] || ''
+    k++
+    if (!want) return blk
+    const cut = blk.search(/(?<=[a-z0-9)\"']\.\s)/) // 首句结束位置
+    const head = cut > 0 ? blk.slice(0, cut + 1) : blk
+    const tailPart = cut > 0 ? blk.slice(cut + 1) : ''
+    const fixed = SIZE_EN_RE.test(head) ? head.replace(SIZE_EN_RE, want) : head
+    return fixed + tailPart
+  })
+  return en.slice(0, i) + fixedBody + tail
+}
+
 function scrubBanned(text: string) {
   return String(text || '')
     .replace(/\boff[- ]?screen\b/gi, 'off-camera')
@@ -181,7 +214,7 @@ function normalizeSubjectTags(text: string) {
     .replace(/<<Subject (\d+)>>/g, '<Subject $1>')
 }
 
-/** 机械补齐 MV 契约（4080 体检的硬 token / 前缀 / fully_copy / 唱段嘴部三词）——
+/** 机械补齐 MV 契约（服务器体检的硬 token / 前缀 / fully_copy / 唱段嘴部三词）——
  *  这些**全是固定字符串**，用代码拼比让模型重写快一个数量级（重写一次 30~90 秒，还可能改坏别的段）。 */
 function completeContract(parts: Map<MvSeg, string>, vocalActive: boolean) {
   // subject_definitions：<Audio 1> 行 + (S1)
@@ -204,11 +237,31 @@ function completeContract(parts: Map<MvSeg, string>, vocalActive: boolean) {
   rt = /<Audio 1>/.test(rt) ? rt.replace(/^\s*<Audio 1>[^\n]*$/m, copyLine) : `${rt.replace(/\s+$/, '')}\n${copyLine}`
   parts.set('retention_analysis', rt)
 
-  // 唱段：mouth / unobstructed / phoneme
+  // 音频声明只允许出现在 subject_definitions：模型常把它抄进 detailed_description，
+  // 还改写成 `<Subject 1> is the supplied song excerpt…`（等于把主唱说成音频）——整行删掉。
+  {
+    const det0 = parts.get('detailed_description')
+    if (det0) {
+      const lines = String(det0).split('\n').filter((l) =>
+        !/^\s*<(?:Subject \d+|Audio 1)>\s+is the supplied song excerpt/i.test(l))
+      parts.set('detailed_description', lines.join('\n'))
+    }
+  }
+
+  // 唱段：只有 <Subject 1>（主唱）张嘴；画面里其他人一律闭嘴（MV 单主唱铁律）
   if (vocalActive) {
     let det = parts.get('detailed_description') || 'detailed_description:'
-    if (!/unobstructed/i.test(det) || !/phoneme/i.test(det) || !/mouth/i.test(det)) {
-      det = `${det.replace(/\s+$/, '')} The full face and an unobstructed mouth stay visible, and the lips articulate every audible phoneme in sync with <Audio 1>.`
+    if (!/lead singer/i.test(det) || !/phoneme/i.test(det) || !/unobstructed/i.test(det)) {
+      det = `${det.replace(/\s+$/, '')} ` +
+        `<Subject 1> is the lead singer: only <Subject 1>'s face and an unobstructed mouth stay visible, and only <Subject 1>'s lips articulate every audible phoneme in sync with <Audio 1>. ` +
+        `Every other person in frame keeps the mouth closed and stays silent — no lip-sync, no singing, no mouthing the words.`
+    }
+    parts.set('detailed_description', det)
+  } else {
+    // 非唱段（间奏）：谁都不许对嘴
+    let det = parts.get('detailed_description') || 'detailed_description:'
+    if (!/nobody sings|mouths stay closed/i.test(det)) {
+      det = `${det.replace(/\s+$/, '')} Nobody sings in this clip: every mouth stays closed and no one mouths the words, <Audio 1> plays as the soundtrack.`
     }
     parts.set('detailed_description', det)
   }
@@ -241,32 +294,39 @@ export async function generateMvShotPrompt(inp: MvShotInput, ask: MvAsk): Promis
     inp.outlineText ? `- 本段画面稿（粗分镜原文，剧情以它为准，不要另编）：\n${inp.outlineText}` : '',
     beatLines ? `- 本段拍点编排（拍数与起止秒必须照它写）：\n${beatLines}` : '',
     assetLines ? `- 各参考图资产的外观原文（subject_definitions 里 with 后面的外观和服装颜色必须从这里取，**不许自己编衣服颜色**）：\n${assetLines}` : '',
-    inp.extra ? `- 补充说明（逐条满足）：${inp.extra}` : '',
+    inp.extra ? `- 🔴 导演修正意见（**这是对这一段提示词的修改要求**：与下面的中文稿/拍点冲突时，以修正意见为准；把修改落到受影响的那一拍里，**不要另起一句、不要追加在结尾**）：${inp.extra}` : '',
   ].filter(Boolean).join('\n')
 
   const zhSys = `你是影视分镜视频提示词写手。下面是你必须遵守的规范：\n\n${inp.skillZh}`
   const enSys = `You are a video-prompt writer for MiniMax H3 (Ref2VA). Follow this spec strictly:\n\n${inp.skillEn}` +
     (inp.styleHead ? `\n\n[Project style — the medium words MUST appear in the prose]\n${inp.styleHead}` : '')
 
-  inp.onProgress?.(1, 4, '读取规范与素材，拼上下文')
+  // 进度一共 8 步：模型调用占 3~5，剩下是机械处理 —— 每一步都是真实发生的，不是假动画
+  const TOTAL = 8
+  inp.onProgress?.(1, TOTAL, '读取规范与素材，拼上下文')
   // ── ① 中文工作版：**机械生成，不调模型**（2026-10-19：这正是最慢的那一半，而中文稿只是给人看的）
   //    内容 = 首行 roster + 每拍一行（起止秒·景别·机位 + 该拍动作 + 本段画面稿 + 有无唱/环境声）
   // 画面稿：**剥掉 `[0-12s]` 这种整首歌的绝对时间标签**（那是粗分镜自己的时间轴，不是本段拍点，
   // 原样贴进来会被误读成分镜时长 —— 2026-10-19 用户「[0-12s] 是啥意思」就是这里）
   const stripTime = (t: string) => String(t || '').replace(/\[[^\]]*\]\s*/g, ' ').replace(/\s+/g, ' ').trim()
   const sceneBlurb = stripTime(String(inp.outlineText || '').replace(/\n+/g, ' '))
+  /** 中文各拍景别（英文生成后用它做机械对齐 —— 模型老把「近景」意译成 close-up） */
+  const zhSizes = beats.map((b: any) => String(b.size || '').trim())
   const zhLines = beats.map((b, i) => {
     const act = String(b.action_zh || b.action || '').trim().replace(/[。.]+$/, '')
     const parts: string[] = []
     if (i === beats.length - 1) {
       if (sceneBlurb) parts.push(`环境与光线：${sceneBlurb.replace(/[。.]+$/, '')}`)
       parts.push(inp.vocalActive ? '本段有唱：脸和嘴全程可见、口型跟原曲' : '本段无任何人声，只有环境底噪')
-      if (inp.extra) parts.push(`补充：${String(inp.extra).replace(/[。.]+$/, '')}`)
     }
     const tail = parts.length ? parts.join('；') + '。' : ''
     return `${b.start.toFixed(2)}-${b.end.toFixed(2)}秒：${b.size || ''}${b.camera ? `·${b.camera}` : ''}。${act}。${tail}`
   })
-  const zh = [inp.roster, ...zhLines].filter(Boolean).join('\n')
+  // 修正意见单独成块（不进某一拍）：它是「怎么改」，不是「再加一句画面」
+  const extraBlock = inp.extra
+    ? `\n【本段修正意见（覆盖上文与之冲突的描写，改到对应那拍里去，不要追加新句）】${String(inp.extra).replace(/\s+$/, '')}`
+    : ''
+  const zh = [inp.roster, ...zhLines].filter(Boolean).join('\n') + extraBlock
   // 参考板是四格（短剧同款）：按本段景别只点一格 —— 近景/特写点脸部特写格，其余点正面全身格；
 // 三格无头，所以必须同时声明"有完整头部与脸"，否则模型照无头参考板画。
   const closeUpShot = /近景|特写/.test(String(inp.beats?.[0]?.size || ''))
@@ -274,15 +334,15 @@ export async function generateMvShotPrompt(inp: MvShotInput, ask: MvAsk): Promis
     ? '`with her face and complete head taken from the face close-up panel (leftmost)` '
     : '`with her body following the front full-body panel (second from left) and a complete head and face` '
 
-  inp.onProgress?.(2, 4, '中文工作版（本地拼稿，不占模型时间）')
+  inp.onProgress?.(2, TOTAL, '中文工作版（本地拼稿，不占模型时间）')
 
   /** 定稿中文稿（每拍一行：起止秒·景别·机位·动作·环境）——
    *  2026-10-20 用户报「英文跟中文对不上」：之前英文只拿到 outline+beats 自己重新创作，
    *  所以必须把这份中文原样交给模型，并要求逐行对译（一个画面都不许增删）。 */
-  const zhDraft = [inp.roster, ...zhLines].filter(Boolean).join('\n')
+  const zhDraft = zh
 
   // ── ② 英文六段（最多 2 次：只有段名不全才重试） ──
-  inp.onProgress?.(3, 4, '英文六段稿')
+  inp.onProgress?.(3, TOTAL, '英文六段稿（第 1 次调用，通常 1~2 分钟）')
   const enAsk = `${ctx}\n\n` +
     `🔴 已定稿的中文工作版（**英文必须逐行照它翻译**：拍数、景别、机位、动作、道具、环境光线全部以它为准，` +
     `一个画面都不许新增、不许省略、不许换动作）：\n${zhDraft}\n\n` +
@@ -300,11 +360,14 @@ export async function generateMvShotPrompt(inp: MvShotInput, ask: MvAsk): Promis
     `  · summary starts with \`[reference generation + audio reuse]\`\n` +
     `  · \`<Audio 1>: fully_copy - the supplied song excerpt is reused 1:1 across the clip.\` in retention_analysis\n` +
     (inp.vocalActive
-      ? `  · singing beat: the full face and an unobstructed mouth stay visible and articulate every audible phoneme in sync with <Audio 1>.\n`
+      ? `  · singing beat: ONLY <Subject 1> sings — its full face and unobstructed mouth stay visible and its lips articulate every audible phoneme in sync with <Audio 1>; every other person in frame keeps the mouth closed, silent, no lip-sync.\n`
       : `  · non-vocal beat: the mouth stays naturally closed and <Subject 1> moves with the rhythm of <Audio 1>.\n`) +
     `🔴 detailed_description: style sentence first, then **${beatN}** block(s):\n${zhTimeline}\n` +
     `- block 1 starts \`[Shot 1] \` with no timestamp; every later block starts \`[Shot N] At MM:SS.mmm, the camera cuts to …\` (cut verb mandatory), each ≤ ${perBeat} chars\n` +
     `- block N must be the English of line N of the Chinese draft above — same shot size, same camera, same action, same props, same environment; do not merge, split or reorder beats.\n` +
+    (inp.extra
+      ? `- 🔴 DIRECTOR'S CORRECTIONS (the 【本段修正意见】 block) OVERRIDE the draft wherever they conflict: rewrite the affected beat block itself (same beat count), never append a new trailing sentence and never add a 7th/8th shot.\n`
+      : '') +
     `🔴 No negated actions or camera moves (no push / not opened her mouth …) — write what the frame shows. Audio declarations (no human voice) and style "avoid …" lines are fine.\n` +
     `🔴 Banned words (the MV checker rejects the prompt on any): screen, phone, tablet, mirror, reflection, projection, poster, portrait, painting, photograph, photo, crowd, television, clone, duplicate, ghost.\n` +
     `🔴 All English. No Chinese characters. Output the six sections only: no explanation, no preamble, no code fence.`
@@ -313,6 +376,7 @@ export async function generateMvShotPrompt(inp: MvShotInput, ask: MvAsk): Promis
   const CORE: readonly MvSeg[] = ['subject_definitions', 'summary', 'retention_analysis', 'detailed_description'] as const
   let parts = new Map<MvSeg, string>()
   for (let attempt = 0; attempt < 2; attempt++) {
+    if (attempt > 0) inp.onProgress?.(4, TOTAL, '英文稿段名不全，重试第 2 次')
     parts = splitSections(clean(await ask(enSys, enAsk)))
     if (CORE.every((x) => parts.get(x))) break
   }
@@ -322,7 +386,7 @@ export async function generateMvShotPrompt(inp: MvShotInput, ask: MvAsk): Promis
   //     （MV 里这两段本来就是固定语义：声音只有 <Audio 1>、配乐 N/A —— 让模型再跑一次纯浪费）
   const missCore = CORE.filter((x) => !parts.get(x))
   if (missCore.length) {
-    inp.onProgress?.(3, 4, `补写缺段：${missCore.join(', ')}`)
+    inp.onProgress?.(5, TOTAL, `补写缺段：${missCore.join(', ')}`)
     const raw = clean(await ask(enSys,
       `The draft is missing these sections: ${missCore.join(', ')}. Write ONLY them (same rules and length limits as above, ` +
       `one <Audio 1> line, summary prefix \`[reference generation + audio reuse]\`, no lyrics, no <d>), keeping every subject number and timestamp. No explanation.`))
@@ -333,11 +397,12 @@ export async function generateMvShotPrompt(inp: MvShotInput, ask: MvAsk): Promis
   }
   if (!parts.get('non_diegetic_music')) parts.set('non_diegetic_music', 'non_diegetic_music:\nN/A')
 
+  inp.onProgress?.(6, TOTAL, '补齐 soundscape / music 默认段（机械）')
   const stillMissing = MV_SEGS.filter((s) => !parts.get(s))
   if (stillMissing.length) throw new Error(`英文六段不全，缺：${stillMissing.join(' ')}`)
 
   // ── ③ 契约 / 格式：全部机械补齐（不调模型） ──
-  inp.onProgress?.(4, 4, '补齐契约、校验收尾')
+  inp.onProgress?.(7, TOTAL, '机械补齐契约、retention 格式')
   completeContract(parts, !!inp.vocalActive)
   const sdText = parts.get('subject_definitions')
   if (sdText) {
@@ -357,7 +422,7 @@ export async function generateMvShotPrompt(inp: MvShotInput, ask: MvAsk): Promis
   for (const k of MV_SEGS) { const v = parts.get(k); if (v) parts.set(k, scrubBanned(v)) }
   let bannedLeft = [...new Set((assemble(parts).match(BANNED_RE) || []).map((x) => x.toLowerCase()))]
   if (bannedLeft.length) {
-    inp.onProgress?.(4, 4, `去禁词：${bannedLeft.join(', ')}`)
+    inp.onProgress?.(7, TOTAL, `去禁词（会多一次模型调用）：${bannedLeft.join(', ')}`)
     try {
       const raw = clean(await ask(enSys,
         `The MV checker rejects these words: ${bannedLeft.join(', ')}. Rewrite ONLY the sentences containing them so the same visual meaning is kept without those words ` +
@@ -370,7 +435,14 @@ export async function generateMvShotPrompt(inp: MvShotInput, ask: MvAsk): Promis
   }
   en = assemble(parts).replace(/\n{2,}/g, '\n').trim()   // 洗过禁词要重新拼（不然返回的还是旧文本）
 
-  const detTail = (parts.get('detailed_description') || '').trim()
+  inp.onProgress?.(8, TOTAL, '收尾校验（断尾补句、剥台词、补尖括号）')
+  // 断尾要看**正文**末尾：⑥ 已把「lead singer / Nobody sings」契约句补在结尾，
+  // 那句自带句号 → 以前永远判"完整"，中间被截断（"…reveal the chair backrest, the windows"）也放过去了
+  const detBody = (parts.get('detailed_description') || '')
+    .replace(/\s*<Subject 1> is the lead singer:[\s\S]*$/i, '')
+    .replace(/\s*Nobody sings in this clip:[\s\S]*$/i, '')
+    .trim()
+  const detTail = detBody
   if (!/[.!?…”")]\s*$/.test(detTail)) {
     try {
       const fixed = clean(await ask(enSys,
@@ -385,6 +457,7 @@ export async function generateMvShotPrompt(inp: MvShotInput, ask: MvAsk): Promis
   }
 
   
+  en = alignShotSizes(en, zhSizes)
   en = normalizeSubjectTags(en)
   en = stripDialogue(en)
   if (!/subject_definitions\s*:/.test(en) || !/detailed_description\s*:/.test(en)) throw new Error('英文稿最终不是六段式')

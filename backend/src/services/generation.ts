@@ -23,7 +23,7 @@ type TaskType = 'image' | 'video'
 const taskLabel = (type: TaskType) => (type === 'image' ? 'ImageTask' : 'VideoTask')
 
 // 轮询节奏：图片 5s×120（上限 10 分钟）；视频 10s×900（上限 2.5 小时）
-//  视频为什么从 300 次（50 分钟）放宽到 900 次：本地 4080 是**单卡串行**（shim 把整个生成
+//  视频为什么从 300 次（50 分钟）放宽到 900 次：本地 服务器是**单卡串行**（shim 把整个生成
 //  等待包在 _comfy_lock 里），批量一次提交 N 条时，第 k 条要等 (k-1)×单条耗时（实测 3.2~3.9
 //  分钟/条）。50 分钟只够排到第 ~13 条，批量再大后面的就会被判「Timeout: polling attempts
 //  exhausted」——片子其实还在正常排队生成。放宽后窗口 ≈ 2.5 小时，与前端批量等待窗口一致。
@@ -1035,9 +1035,9 @@ async function normalizeVideoReferenceUrl(value: string | null | undefined): Pro
 }
 
 /**
- * RefMod 卡（2026-10-08）：按参考图顺序把 Mac 主副本上的卡读成 base64，随请求下发到 4080。
+ * RefMod 卡（2026-10-08）：按参考图顺序把 Mac 主副本上的卡读成 base64，随请求下发到 服务器。
  *  - 卡名规则：`refmod_<key>_v1.safetensors`（key = `scene-3` / `character-15` / `prop-7`）
- *  - 存放：`<data>/refmods/`（Mac 主副本；4080 侧只做缓存）
+ *  - 存放：`<data>/refmods/`（Mac 主副本；服务器侧只做缓存）
  *  - **对账**：资产数必须与参考图数一致；任一资产缺卡 → 整单失败（宁可报错，也不出没带卡的漂移片）
  *  - 未传 keys（老 App / 不带头）时返回空 → 走原路，向后兼容
  */

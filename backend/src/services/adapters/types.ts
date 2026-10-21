@@ -116,9 +116,9 @@ export interface VideoGenerationRecord {
   chainSegments?: number | null
   /** 音乐 MV（2026-10-18）：MV 专用透传字段，适配器原样并进请求体 */
   mvExtras?: Record<string, unknown> | null
-  /** RefMod 卡（2026-10-08）：随请求下发的身份/场景/道具卡，4080 侧落盘后按序填槽 */
+  /** RefMod 卡（2026-10-08）：随请求下发的身份/场景/道具卡，服务器侧落盘后按序填槽 */
   refmodFiles?: Array<{ name: string; data: string }> | null
-  /** 角色声音源 wav（2026-10-11）：单独下发，4080 落盘成 voice_<卡名>.wav(32k) → 官方 ref_audios */
+  /** 角色声音源 wav（2026-10-11）：单独下发，服务器落盘成 voice_<卡名>.wav(32k) → 官方 ref_audios */
   voiceWavFiles?: Array<{ name: string; data: string }> | null
   // ... 其他字段
 }
@@ -156,6 +156,6 @@ export interface VideoPollResponse {
   /** 2026-10-14（任务栏计时）：上游回报这条任务**是不是真在渲染**。
    *  本地单卡串行 —— 批量提交时除拿到锁的那条外都在排队，而任务表里它们同样显示「生成中」，
    *  光看 status 分不出来。state='running' 带 startedAt（**本机** epoch 毫秒，由上游 elapsed
-   *  反推，避免 4080 与本机时钟偏差），前端据此给那一条走秒表；'waiting' = 排队中，不显示计时。 */
+   *  反推，避免 服务器与本机时钟偏差），前端据此给那一条走秒表；'waiting' = 排队中，不显示计时。 */
   progress?: { state: 'running' | 'waiting'; startedAt?: number }
 }
