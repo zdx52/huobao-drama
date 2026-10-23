@@ -491,7 +491,7 @@
                     @input="e => { setDraftOfShot(activeShot, e.target.value); resizeCell(e.target) }"
                     @change="e => saveOutline(activeShot, e.target.value)" />
                   <div class="dim" style="font-size:11px;margin-top:4px">这一段的画面稿可改；改完这里就是生成提示词的剧情依据。</div>
-                  <label class="field" style="margin-top:8px">
+                  <label v-if="!isDance" class="field" style="margin-top:8px">
                     <span class="field-label">补充说明 <span class="dim">（中文即可，编译时自动转英文追加到提示词末尾；可留空）</span></span>
                     <textarea v-model="activeShot.promptExtra" class="textarea" rows="3"
                       placeholder="例：这一段她手里不要拿东西；背景不要出现其他人"
@@ -539,7 +539,7 @@
                 <div class="video-inspector-prompt-head">
                   <span class="video-inspector-label video-inspector-label-hero">导演分镜稿（镜头编号 / 时间码 / 景别 / 机位）</span>
                   <div class="video-inspector-actions">
-                    <button type="button" class="btn btn-sm" @click="genShotPrompt(activeShot)" :disabled="busy || shotPromptBusy === activeShot.id">
+                    <button v-if="!isDance" type="button" class="btn btn-sm" @click="genShotPrompt(activeShot)" :disabled="busy || shotPromptBusy === activeShot.id">
                       {{ shotPromptBusy === activeShot.id ? '生成中…' : (activeShot.prompt ? '重新生成' : 'AI 生成') }}
                     </button>
                     <button type="button" class="btn btn-sm" @click="checkShot(activeShot)" :disabled="checkingShot === activeShot.id"
@@ -554,7 +554,7 @@
                   :options="mvMentionOptions"
                   :rows="14"
                   input-class="textarea video-inspector-prompt"
-                  placeholder="还没有分镜稿 —— 点上面的「AI 生成」，或顶部「批量补齐提示词」；生成后可在这里手改（输入 @ 可引用人物 / 场景）"
+                  :placeholder="isDance ? '还没有分镜稿 —— 点顶部「编译舞蹈提示词」（确定性模板，必备引用不会漏）；生成后可在这里手改' : '还没有分镜稿 —— 点上面的「AI 生成」，或顶部「批量补齐提示词」；生成后可在这里手改（输入 @ 可引用人物 / 场景）'"
                   @commit="(v) => { activeShot.prompt = v; saveShot(activeShot) }" />
                 <div class="video-inspector-prompt-extra">
                   <button v-if="activeShot.promptEn" type="button" class="btn btn-sm video-inspector-prompt-en-toggle"
