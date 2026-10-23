@@ -1720,7 +1720,10 @@ app.post('/projects/:id/shots', async (c) => {
   const project = await loadProject(id)
   if (!project) return notFound(c, 'MV 项目不存在')
   // 分镜的唱/非唱要靠人声轨判，没分离就切会全标成「唱」
-  if (!project.vocalStem) return badRequest(c, '先点顶栏「人声分离」—— 分镜的唱/非唱要用人声轨判断')
+  // 舞蹈 MV 没有歌也没有人声轨，切段走参考视频，不受这条约束
+  if (String(project.kind || 'song') !== 'dance' && !project.vocalStem) {
+    return badRequest(c, '先点顶栏「人声分离」—— 分镜的唱/非唱要用人声轨判断')
+  }
   const body = await c.req.json().catch(() => ({} as any))
   const maxS = Math.min(HARD_MAX_S, Number(body.max_seconds || project.maxShotSeconds) || DEFAULT_MAX_S)
   // 到这一步才第一次把原曲转 32k 送 服务器（建项目时不碰它）

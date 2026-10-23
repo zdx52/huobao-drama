@@ -151,13 +151,15 @@
           <span class="mv-label">画幅</span>
           <BaseSelect v-model="editRatio" :options="RATIOS" placeholder="画幅" @update:model-value="saveRatio" />
           <span class="field-hint">人物板固定 16:9；场景图和成片按这个比例（改了会重建画面，已出的图和已出的片不会自动重做）</span>
-          <span class="field-hint">歌：{{ pj.songFile }}（{{ Number(pj.songSeconds || 0).toFixed(1) }}s）</span>
-          <button class="btn btn-sm" :class="{ 'is-on': !!pj.vocalStem }" :disabled="busy || separating"
-            :title="pj.vocalStem ? '已分离：' + pj.vocalStem : '用 demucs 分出人声轨（分镜的唱/非唱要靠它）'"
-            @click="askSeparate">
-            {{ separating ? '分离中…' : (pj.vocalStem ? '重新分离人声' : '人声分离') }}
-          </button>
-          <span class="field-hint" :class="{ 'text-accent': !pj.vocalStem }">人声：{{ separating ? '正在分离（第一次要几分钟，可以先去填歌词）' : (pj.vocalStem ? '已分离' : '未分离') }}</span>
+          <template v-if="!isDance">
+            <span class="field-hint">歌：{{ pj.songFile }}（{{ Number(pj.songSeconds || 0).toFixed(1) }}s）</span>
+            <button class="btn btn-sm" :class="{ 'is-on': !!pj.vocalStem }" :disabled="busy || separating"
+              :title="pj.vocalStem ? '已分离：' + pj.vocalStem : '用 demucs 分出人声轨（分镜的唱/非唱要靠它）'"
+              @click="askSeparate">
+              {{ separating ? '分离中…' : (pj.vocalStem ? '重新分离人声' : '人声分离') }}
+            </button>
+            <span class="field-hint" :class="{ 'text-accent': !pj.vocalStem }">人声：{{ separating ? '正在分离（第一次要几分钟，可以先去填歌词）' : (pj.vocalStem ? '已分离' : '未分离') }}</span>
+          </template>
         </div>
         <template v-if="!isDance">
           <label class="mv-label">歌词（一行一句；既用来把切点落在句界上，也是成片字幕的原文）</label>
@@ -456,7 +458,7 @@
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2"/></svg>
               </button>
             </div>
-            <div v-if="!videoRows.length" class="video-task-empty">{{ shots.length ? '这个筛选下没有段落' : '还没有分镜 —— 先点上方「拆分分镜」（需先人声分离）' }}</div>
+            <div v-if="!videoRows.length" class="video-task-empty">{{ shots.length ? '这个筛选下没有段落' : (isDance ? '还没有分镜 —— 先上传参考舞蹈视频（会自动切段）' : '还没有分镜 —— 先点上方「拆分分镜」（需先人声分离）') }}</div>
           </div>
           <div v-if="selectMode" class="video-task-foot is-batch">
             <button class="shot-quick-btn" @click="selectedIds = videoRows.map(x => x.id)">全选</button>
@@ -1246,7 +1248,7 @@ const fixing = ref(false)    // 「一键修复」正在进行
 async function genShotPrompt(s) {
   if (!s) return
   showEn.value = false
-  if (!need(!!pj.value.vocalStem, '先做人声分离')) return
+  if (!isDance.value && !need(!!pj.value.vocalStem, '先做人声分离')) return
   shotPromptBusy.value = s.id
   promptStep.value = null
   promptResult.value = null
@@ -1888,7 +1890,7 @@ async function genOutline() {
 }
 
 async function genShots() {
-  if (!need(!!pj.value.vocalStem, '先点顶栏「人声分离」—— 分镜的唱/非唱要用人声轨判断，没分离就切会全标成唱')) return
+  if (!isDance.value && !need(!!pj.value.vocalStem, '先点顶栏「人声分离」—— 分镜的唱/非唱要用人声轨判断，没分离就切会全标成唱')) return
   if (!guardStep(4)) return
   const n = shots.value.length
   askConfirm(n ? '重新拆分分镜' : '拆分分镜',
