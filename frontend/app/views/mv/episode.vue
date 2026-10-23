@@ -143,7 +143,7 @@
 
       <!-- 第 1 页 · 原始内容 -->
       <div v-if="tab === 'origin'" class="card mv-block">
-        <div class="mv-block-title">原始内容（歌 + 歌词 + 分镜提示词）</div>
+        <div class="mv-block-title">{{ isDance ? '原始内容（参考舞蹈视频 + 人物/场景）' : '原始内容（歌 + 歌词 + 分镜提示词）' }}</div>
         <div class="mv-row">
           <span class="mv-label">风格</span>
           <BaseSelect v-model="editStyle" :options="styleOptions" placeholder="选一个画风" searchable @update:model-value="saveStyle" />
@@ -159,8 +159,10 @@
           </button>
           <span class="field-hint" :class="{ 'text-accent': !pj.vocalStem }">人声：{{ separating ? '正在分离（第一次要几分钟，可以先去填歌词）' : (pj.vocalStem ? '已分离' : '未分离') }}</span>
         </div>
-        <label class="mv-label">歌词（一行一句；既用来把切点落在句界上，也是成片字幕的原文）</label>
-        <textarea v-model="lyrics" class="input textarea" rows="5" placeholder="一行一句，可留空"></textarea>
+        <template v-if="!isDance">
+          <label class="mv-label">歌词（一行一句；既用来把切点落在句界上，也是成片字幕的原文）</label>
+          <textarea v-model="lyrics" class="input textarea" rows="5" placeholder="一行一句，可留空"></textarea>
+        </template>
         <div class="mv-row mv-credits-row">
           <span class="mv-label">主创</span>
           <input v-model="songTitle" class="input mv-credit" placeholder="曲名" @change="saveCredits" />
@@ -472,7 +474,7 @@
                 <section class="video-inspector-section">
                   <span class="video-inspector-label">本段内容（分镜描述）</span>
                   <div class="mv-shot-fields">
-                    <div class="mv-shot-field"><span class="k">景别</span>
+                    <div v-if="!isDance" class="mv-shot-field"><span class="k">景别</span>
                       <select class="mv-sel" :value="activeShot.shotSize || '中景'" @change="setShotSize(activeShot, $event.target.value)">
                         <option v-for="z in SHOT_SIZES" :key="z" :value="z">{{ z }}</option>
                       </select>

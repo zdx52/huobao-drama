@@ -1,4 +1,4 @@
-import { planDanceSegments, compileDancePrompt } from './src/routes/mv.ts'
+import { planDanceSegments, compileDancePrompt, compileDancePromptZh } from './src/routes/mv.ts'
 
 /** 不变量：段网格合法、段间连续、覆盖帧数 ≤ 总数且零头 < 124 */
 function verify(total: number, label: string) {
@@ -32,4 +32,15 @@ const dd = p.split('detailed_description:')[1].split('overall_soundscape:')[0]
 const words = dd.replace(/\n/g, ' ').split(/\s+/).filter(Boolean).length
 if (words < 350 || words > 500) throw new Error('detailed_description 词数超口径: ' + words)
 const total = p.replace(/\n/g, ' ').split(/\s+/).filter(Boolean).length
+// 中文导演分镜稿：界面「导演分镜稿」那一列必须是中文（曾经误写成英文六段）
+const zh = compileDancePromptZh({ frames: 124, shotNo: 1, totalShots: 3 })
+const cjk = zh.match(/[\u4e00-\u9fff]/g) || []
+if (cjk.length < 60) throw new Error('中文稿汉字太少，可能还是英文: ' + cjk.length)
+for (const kw of ['出场人物', '场景', '机位', '0.00-5.17秒', '复刻参考视频', '参考视频原音']) {
+  if (!zh.includes(kw)) throw new Error('中文稿缺: ' + kw)
+}
+// 英文稿必须显式补头（项目铁律：参考板是无头的）
+if (!p.includes('complete head')) throw new Error('英文稿缺「完整头部」声明')
+console.log('中文稿 ' + cjk.length + ' 汉字，英文稿有完整头部声明')
+
 console.log('提示词: detailed_description ' + words + ' 词（口径 350-500），全文 ' + total + ' 词，六段齐全、标记齐全')

@@ -1011,12 +1011,14 @@ app.post('/projects/:id/dance-prompts', async (c) => {
   const total = shots.length
   let n = 0
   for (const sh of shots) {
-    const text = compileDancePrompt({
+    const en = compileDancePrompt({
       characterPrompt: project.characterPrompt || '', scenePrompt: project.scenePrompt || '',
       style: project.style || '', frames: Number(sh.frames) || 124,
       shotNo: Number(sh.shotNumber) || 1, totalShots: total,
     })
-    await db.update(schema.mvShots).set({ promptEn: text, prompt: text, updatedAt: now() })
+    const zh = compileDancePromptZh({ frames: Number(sh.frames) || 124,
+      shotNo: Number(sh.shotNumber) || 1, totalShots: total })
+    await db.update(schema.mvShots).set({ promptEn: en, prompt: zh, updatedAt: now() })
       .where(eq(schema.mvShots.id, sh.id))
     n++
   }
@@ -1365,6 +1367,15 @@ function planDanceSegments(total: number): { index: number; startFrame: number; 
  * 舞蹈段提示词（英文六段式）：动作来源写死 <Video 1>，人物/场景措辞直接沿用项目里那套字段，
  * 音频声明 <Audio 1>（分段 = 源片同一时间窗的原音，成片顺序拼接即成完整原声）。
  */
+/** 舞蹈段的中文导演分镜稿（界面显示用）：动作/机位全部来自源片，所以只交代「复刻参考视频」。 */
+function compileDancePromptZh(p: { frames: number; shotNo: number; totalShots: number }): string {
+  const end = ((Number(p.frames) || 124) / 24).toFixed(2)
+  return [
+    `出场人物：参考图里的同一人物（身份由身份卡锁定）；场景：见场景参考图；机位：完全复刻参考视频`,
+    `0.00-${end}秒：机位与运镜完全复刻参考视频（无额外推拉摇移）。她逐帧复刻参考视频的舞步——脚步落点、屈膝幅度、胯部路径、躯干转向、手臂弧线与手腕高度、头部朝向、重心转移都与参考视频同一帧对同一帧；服装与发型与参考图一致；本段声音为参考视频原音。`,
+  ].join('\n')
+}
+
 function compileDancePrompt(p: { characterPrompt?: string; scenePrompt?: string; style?: string; frames: number; shotNo: number; totalShots: number }): string {
   const who = String(p.characterPrompt || '').replace(/\s+/g, ' ').trim()
     || 'a young woman, short black chin-length hair parted to one side, calm steady gaze'
@@ -1375,7 +1386,7 @@ function compileDancePrompt(p: { characterPrompt?: string; scenePrompt?: string;
   const part = `segment ${p.shotNo} of ${p.totalShots}`
   return [
     'subject_definitions:',
-    `<Subject 1> is the performer whose identity is locked by the identity card and whose body, outfit and styling come from <Picture 1>: ${who}.`,
+    `<Subject 1> is the performer whose identity is locked by the identity card and whose body, outfit and styling come from <Picture 1>: ${who}. She has a complete head, a full face and her own hair in every frame — the reference board shows the outfit only, so the head comes from the identity card and from this description.`,
     `<Video 1> is the source dance video for the target edit, providing the choreography, body motion, expression timing, subject positioning, camera framing, camera movement, perspective, pacing and temporal structure.`,
     `<Audio 1> is the synchronized audio track of <Video 1> and is reused as the complete final audio track.`,
     'summary:',
@@ -2114,10 +2125,21 @@ app.get('/projects/:id/shots/:sid/prompt-progress', async (c) => {
 })
 
 /** 本地机械体检：查 服务器那套没覆盖、但我们真踩过的坑（只读，不改动任何内容） */
-function localPromptProblems(shot: any): string[] {
+function localPromptProblems(shot: any, mode: 'song' | 'dance' = 'song'): string[] {
   const en = String(shot?.promptEn || '')
   const out: string[] = []
   if (!en.trim()) return out
+  if (mode === 'dance') {
+    // 舞蹈段口径：动作来自 <Video 1>，没有唱段，不套 lead singer / 谁都不唱 那套
+    if (!en.includes('<Video 1>')) out.push('舞蹈提示词没点名 <Video 1> 作为动作来源')
+    if (!en.includes('[video editing + reference generation + audio reuse]')) out.push('舞蹈提示词模式头不对（应为 video editing + reference generation + audio reuse）')
+    if (!/complete head/i.test(en)) out.push('舞蹈提示词没声明「有完整头部」（参考板是无头的，必须补头）')
+    if (!/fully_copy/.test(en)) out.push('音频必须是 fully_copy（整段复用源片原音）')
+    if (/<d>|<\/d>/.test(en)) out.push('出现 <d> 台词块（MV 不许写台词/歌词）')
+    const bannedD = [...new Set((en.match(/\b(?:screen|screens|phone|phones|smartphone|tablet|mirror|mirrors|reflection|reflections|projection|poster|photograph|crowd|television|clone|duplicate|ghost)\b/gi) || []).map((x) => x.toLowerCase()))]
+    if (bannedD.length) out.push(`含禁区词：${bannedD.slice(0, 4).join(', ')}`)
+    return out
+  }
   const det = (en.split(/^detailed_description:\s*$/m)[1] || '').split(/^overall_soundscape:/m)[0]
   if (/^\s*<(?:Subject \d+|Audio 1)>\s+is the supplied song excerpt/im.test(det)) {
     out.push('音频声明混进了 detailed_description（只能出现在 subject_definitions）')
@@ -2143,15 +2165,18 @@ app.post('/projects/:id/shots/:sid/check', async (c) => {
   const [shot] = await db.select().from(schema.mvShots)
     .where(and(eq(schema.mvShots.id, sid), eq(schema.mvShots.projectId, id)))
   if (!shot) return notFound(c, '分镜不存在')
+  const project = await loadProject(id)
   try {
     if (!String(shot.promptEn || '').trim()) {
       return success(c, { shotNumber: shot.shotNumber, ok: false, problems: ['这一段的英文提示词还没生成 —— 点该段的「AI 生成」'] })
     }
+    const mode = String(project.kind || 'song') === 'dance' ? 'dance' : 'song'
     const out = await shimPost<{ rows: any[] }>('/v2/mv/check', {
+      mode,
       shots: [{ prompt: shot.promptEn || '', vocal_state: shot.vocalState || 'vocal_active' }],
     })
     const row = out?.rows?.[0] || { ok: false, problems: ['体检无返回'] }
-    const problems = [...(row.problems || []), ...localPromptProblems(shot)]
+    const problems = [...(row.problems || []), ...localPromptProblems(shot, mode)]
     return success(c, { shotNumber: shot.shotNumber, ok: !problems.length, problems })
   } catch (err: any) {
     logTaskError('MV', 'shot-check', { id, sid, error: err?.message })
@@ -2305,17 +2330,19 @@ app.post('/projects/:id/check', async (c) => {
   if (!shots.length) return badRequest(c, '还没有分镜')
   try {
     // 体检检查的是【英文稿 promptEn】——那是真正发给 H3 的；中文稿是给人看的导演分镜稿，不含官方六段
+    const mode = String(project.kind || 'song') === 'dance' ? 'dance' : 'song'
     const out = await shimPost<{ rows: any[]; ok: number; bad: number }>('/v2/mv/check', {
+      mode,
       shots: shots.map((s) => ({ prompt: s.promptEn || '', vocal_state: s.vocalState || 'vocal_active' })),
     })
     const rows = (out?.rows || []).map((r: any, i: number) => {
       const noEn = !String(shots[i]?.promptEn || '').trim()
       const problems = noEn
         ? ['这一段的英文提示词还没生成 —— 点「编译全部提示词」或该段的「AI 生成」']
-        : [...(r.problems || []), ...localPromptProblems(shots[i])]
+        : [...(r.problems || []), ...localPromptProblems(shots[i], mode)]
       return {
         shotNumber: shots[i]?.shotNumber ?? i + 1,
-        ok: !noEn && !!r.ok && !localPromptProblems(shots[i]).length,
+        ok: !noEn && !!r.ok && !localPromptProblems(shots[i], mode).length,
         problems,
       }
     })
@@ -2428,14 +2455,15 @@ app.post('/projects/:id/shots/:sid/render', async (c) => {
   // 舞蹈段：提示词缺失就现场按项目的人物/场景字段编译（动作来源写死 <Video 1>）
   if (isDance && !String(shot.promptEn || '').includes('<Video 1>')) {
     const all = await db.select().from(schema.mvShots).where(eq(schema.mvShots.projectId, id))
-    const danceText = compileDancePrompt({
+    const danceEn = compileDancePrompt({
       characterPrompt: project.characterPrompt || '', scenePrompt: project.scenePrompt || '',
       style: project.style || '', frames,
       shotNo: Number(shot.shotNumber) || 1, totalShots: all.length || 1,
     })
-    await db.update(schema.mvShots).set({ promptEn: danceText, prompt: danceText, updatedAt: now() })
+    const danceZh = compileDancePromptZh({ frames, shotNo: Number(shot.shotNumber) || 1, totalShots: all.length || 1 })
+    await db.update(schema.mvShots).set({ promptEn: danceEn, prompt: danceZh, updatedAt: now() })
       .where(eq(schema.mvShots.id, sid))
-    shot.promptEn = danceText
+    shot.promptEn = danceEn
   }
   try {
     const taskId = await generateVideo({
@@ -2664,4 +2692,4 @@ app.post('/projects/:id/assemble', async (c) => {
 
 export default app
 export { parseLrcLines, planSegmentsByLines, lyricsInWindow, salvageWhat, localPromptProblems, propNameKeys,
-         planDanceSegments, compileDancePrompt }   // 给自检脚本用
+         planDanceSegments, compileDancePrompt, compileDancePromptZh }   // 给自检脚本用
