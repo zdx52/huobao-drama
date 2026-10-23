@@ -1323,6 +1323,9 @@ function toDanceMov(input: string, output: string, w: number, h: number): Promis
       .outputOptions([
         '-vf', `scale=${w}:${h}:force_original_aspect_ratio=increase,crop=${w}:${h}`,
         '-r', '24', '-pix_fmt', 'yuv420p', '-crf', '16',
+        // 音频补 1 秒静音：转 24fps 后视频会多出约 1.6 帧，音频不补就会比视频短几十毫秒，
+        // 顶到片尾时被 V2V 拒（source audio is N samples short）；多给比少给安全，V2V 会按目标截断
+        '-af', 'apad=pad_dur=1',
       ])
       .videoCodec('libx264')
       .audioCodec('pcm_s16le').audioFrequency(32000).audioChannels(1)
@@ -2485,6 +2488,8 @@ app.post('/projects/:id/shots/:sid/render', async (c) => {
         dance_start_frame: Math.round((Number(shot.startSeconds) || 0) * 24),
         // 段序号（0 起）：第 2 段起服务端会把上一段末 39 帧钉成本段前缀，接缝不跳
         dance_seg_index: Math.max(0, (Number(shot.shotNumber) || 1) - 1),
+        // 源片总帧数：续接段窗口前移后不能超出它，否则音频样本不足会报错
+        dance_total_frames: Number(project.danceFrames) || 0,
         mv_frames: frames,
         mv_width: VW, mv_height: VH,
         refmod_files: cards,

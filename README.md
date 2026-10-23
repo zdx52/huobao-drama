@@ -5,7 +5,7 @@
 A self-maintained fork of [chatfire-AI/huobao-drama](https://github.com/chatfire-AI/huobao-drama) — an AI short-drama production pipeline (script → assets → storyboards → video), shipped as an Electron desktop app with a Nuxt front end and a TypeScript back end.
 
 > **This is a personal fork.** All of my changes live on the **`chain`** branch; **`master`** is kept exactly as upstream delivered it, which makes diffing easy. I do not chase upstream updates, and I do not offer support for this fork.
-> App version `desktop 4.0.274` · last update 2026-10-23 · 372 own commits since 2026-10-07.
+> App version `desktop 4.0.275` · last update 2026-10-23 · 372 own commits since 2026-10-07.
 
 ## What this fork adds
 
@@ -20,6 +20,7 @@ A self-maintained fork of [chatfire-AI/huobao-drama](https://github.com/chatfire
 
 | Date | Tag | Highlights |
 | --- | --- | --- |
+| 2026-10-23 | `4.0.275-zdz1` | **Dance source transcode now pads the audio.** Resampling to 24 fps rounds the video longer (60->24 fps adds about 1.6 frames) while the audio keeps its old length, leaving a ~36 ms shortfall — H3 rejects a continuation window that reaches the tail (`source audio is 1140 samples short`). The transcode now pads audio with `apad` to match the video exactly, and the source's total frame count is sent to the server so an over-long window steps down on the 17k+5 grid. |
 | 2026-10-23 | `4.0.274-zdz1` | **Two dead controls hidden in dance mode.** In a dance project the per-shot “AI generate / regenerate” button (free-form LLM writing that tends to drop required references like `<Video 1>` and the mode header) and the “extra notes” field (the dance prompt is built by a deterministic template and never reads it) are gone — dance prompts come only from the top-level “compile dance prompts”. Server side also guards the chain: from segment 2 on it waits for the previous segment's cached latent (up to 30 minutes) and falls back to an independent segment if it never arrives, instead of failing the whole run. |
 | 2026-10-23 | `4.0.273-zdz1` | **Dance MV no longer needs vocal separation at all.** Clicking “AI generate”, “check” or “split shots” in a dance project used to demand a vocal stem first (that rule belongs to singing MVs) — dance mode now skips the stem entirely, and the header hides the separation button and the “vocals: not separated” note. The empty-shot hint now says “upload the reference dance video first”. |
 | 2026-10-23 | `4.0.272-zdz1` | **Dance-MV segment seams (continuation).** The server now pins the previous segment's last 39 frames as the new segment's opening (never denoised) and trims those frames off after generation, so two segments no longer jump at the join. From segment 2 on, the source window shifts back 39 frames to carry that context; generation time per such segment grows about 27%. Segment 1 is unchanged. |
