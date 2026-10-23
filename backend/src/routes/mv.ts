@@ -2480,6 +2480,8 @@ app.post('/projects/:id/shots/:sid/render', async (c) => {
         dance_source: project.danceSource,
         dance_ref_source: project.danceRefSource,
         dance_start_frame: Math.round((Number(shot.startSeconds) || 0) * 24),
+        // 段序号（0 起）：第 2 段起服务端会把上一段末 39 帧钉成本段前缀，接缝不跳
+        dance_seg_index: Math.max(0, (Number(shot.shotNumber) || 1) - 1),
         mv_frames: frames,
         mv_width: VW, mv_height: VH,
         refmod_files: cards,
