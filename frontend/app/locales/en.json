@@ -1016,7 +1016,13 @@
       "markedDone": "Done",
       "markDoneTitle": "Manually mark this episode's export as done (click again to undo)",
       "markedDoneToast": "Marked as done",
-      "unmarkDoneToast": "Done mark removed"
+      "unmarkDoneToast": "Done mark removed",
+      "upscale": "Upscale 1080p",
+      "upscaling": "Upscaling…",
+      "upscaled": "1080p",
+      "upscaleTitle": "Upscale to 1080p proportionally (keeps the original aspect ratio)",
+      "upscaleDone": "Upscaled to {w}×{h}",
+      "upscaleFailed": "Upscale failed"
     },
     "image": {
       "generatingChar": "Character image generating",

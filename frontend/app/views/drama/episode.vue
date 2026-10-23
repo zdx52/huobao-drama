@@ -1003,6 +1003,8 @@
                   <div class="merge-card-meta">
                     <span class="mono">{{ formatHistoryTime(m.created_at) }}</span>
                     <span v-if="m.duration">· {{ m.duration }}s</span>
+                    <!-- 2026-10-22：按钮另起一行，避免删除按钮被挤出卡片外 -->
+                    <span class="meta-break" aria-hidden="true" />
                     <a
                       v-if="m.status === 'completed' && m.merged_url"
                       :href="'/' + m.merged_url"
@@ -1010,18 +1012,33 @@
                       class="btn btn-sm"
                       @click.stop
                     >
-                      <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                      <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
                       {{ t('common.download') }}
                     </a>
+                    <!-- 2026-10-22：等比例超分到 1080p（原始什么比例就用什么比例） -->
+                    <button
+                      v-if="m.status === 'completed' && m.merged_url && !isUpscaled(m)"
+                      type="button"
+                      class="btn btn-sm"
+                      :disabled="upscalingId === m.id"
+                      :title="t('episode.export.upscaleTitle')"
+                      @click.stop="upscaleMerge(m)"
+                    >
+                      <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 3 21 3 21 9"/><path d="M21 3l-7 7"/><polyline points="9 21 3 21 3 15"/><path d="M3 21l7-7"/></svg>
+                      {{ upscalingId === m.id ? t('episode.export.upscaling') : t('episode.export.upscale') }}
+                    </button>
+                    <span v-else-if="m.status === 'completed' && isUpscaled(m)" class="merge-card-tag">{{ t('episode.export.upscaled') }}</span>
                     <!-- 2026-10-09：成片列表原先只有「下载」，拼接完的成品删不掉 -->
+                    <!-- 2026-10-22：改成只留图标（title 仍有提示）—— 按钮多了之后
+                         「删除该成片」这行文字会把整组按钮撑到卡片外 -->
                     <button
                       type="button"
                       class="btn btn-sm merge-card-del"
                       :title="t('episode.export.deleteRecord')"
+                      :aria-label="t('episode.export.deleteRecord')"
                       @click.stop="removeMerge(m)"
                     >
                       <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2"/></svg>
-                      {{ t('episode.export.deleteRecord') }}
                     </button>
                   </div>
                 </div>
@@ -1788,6 +1805,28 @@ function toggleSelectAllExport() {
 async function loadExportMerges() {
   if (!epId.value) return
   try { exportMerges.value = await mergeAPI.list(epId.value) || [] } catch { /* 静默 */ }
+}
+
+// 2026-10-22：等比例超分到 1080p。
+// 后端在 scenes 里打 'upscaled' 标记；老数据无标记 → 仍可点（后端会自己判短边是否已 ≥1080）。
+const upscalingId = ref(null)
+
+function isUpscaled(m) {
+  try { return JSON.parse(m?.scenes || '[]').includes('upscaled') } catch { return false }
+}
+
+async function upscaleMerge(m) {
+  if (!epId.value || !m?.id || upscalingId.value) return
+  upscalingId.value = m.id
+  try {
+    const r = await mergeAPI.upscale(epId.value, m.id)
+    await loadExportMerges()
+    toast.success(t('episode.export.upscaleDone', { w: r?.width, h: r?.height }))
+  } catch (e) {
+    toastError(e, { fallback: 'episode.export.upscaleFailed' })
+  } finally {
+    upscalingId.value = null
+  }
 }
 
 // 2026-10-09：删除一条拼接成品。后端软删（写 deleted_at），列表端点已过滤 isNull(deletedAt)，
@@ -6853,8 +6892,22 @@ button.video-task-metric.on { box-shadow: 0 0 0 2px var(--accent); }
   text-align: center;
 }
 .merge-card-pending.is-failed { color: var(--error); background: var(--error-bg); }
-.merge-card-meta { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--text-3); min-width: 0; }
-.merge-card-meta .btn { margin-left: auto; }
+/* 2026-10-22：按钮多了（下载/超分/删除）后，原来「每个 .btn 都 margin-left:auto」
+   等于要 N 份 auto 间距 → 最后一个按钮被挤出卡片外。
+   修法（照 MV 页成熟做法）：时间/时长一行、按钮另起一行 + flex-wrap，窄卡片也不溢出。
+   换行点用 .meta-break 元素实现（CSS 伪元素在 flex 里做换行不可靠）。 */
+.merge-card-meta { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 6px; font-size: 11px; color: var(--text-3); min-width: 0; }
+.merge-card-meta .btn { flex: 0 0 auto; margin-left: 0; }
+.merge-card-meta .meta-break { flex-basis: 100%; height: 0; margin: 0; }
+/* 2026-10-22：已超分成片的标记（代替按钮） */
+.merge-card-tag {
+  padding: 2px 7px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  color: var(--text-3);
+  font-size: 10px;
+  white-space: nowrap;
+}
 .merge-card.playable { cursor: pointer; }
 .merge-card.playable:hover { border-color: var(--border-strong); box-shadow: var(--shadow-card); }
 .merge-card-thumb { position: relative; }

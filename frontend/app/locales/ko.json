@@ -1008,7 +1008,13 @@
       "markedDone": "완료됨",
       "markDoneTitle": "이 에피소드의 납출을 수동으로 완료 표시(다시 클릭하면 해제)",
       "markedDoneToast": "완료로 표시했습니다",
-      "unmarkDoneToast": "완료 표시를 해제했습니다"
+      "unmarkDoneToast": "완료 표시를 해제했습니다",
+      "upscale": "1080p 업스케일",
+      "upscaling": "업스케일 중…",
+      "upscaled": "1080p",
+      "upscaleTitle": "원본 화면 비율을 유지한 채 1080p로 확대",
+      "upscaleDone": "{w}×{h}(으)로 업스케일했습니다",
+      "upscaleFailed": "업스케일 실패"
     },
     "image": {
       "generatingChar": "캐릭터 이미지 생성 중",

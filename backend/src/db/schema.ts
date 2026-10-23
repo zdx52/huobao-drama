@@ -339,6 +339,10 @@ export const mvProjects = sqliteTable('mv_projects', {
   outline: text('outline'),          // JSON
   style: text('style'),
   storyPrompt: text('story_prompt'), // 用户填的 MV 分镜提示词（人物/场景从它提取）
+  kind: text('kind').default('song'),        // song = 唱歌 MV；dance = 舞蹈复刻（V2V 部分去噪）
+  danceSource: text('dance_source'),         // 舞蹈源片远端名（768x1344，V2V 底稿）
+  danceRefSource: text('dance_ref_source'),  // 参考副本远端名（半分辨率，只喂 ref_videos）
+  danceFrames: integer('dance_frames'),      // 源片总帧数（24fps）
   status: text('status').default('draft'),
   outputUrl: text('output_url'),
   createdAt: text('created_at').notNull(),

@@ -36,6 +36,7 @@ import { STORAGE_ROOT } from '../utils/paths.js'
 import { success, created, badRequest, notFound, serverError, now } from '../utils/response.js'
 import { logTaskError, logTaskStart, logTaskSuccess } from '../utils/task-logger'
 import { buildAss, parseLrc } from '../services/mv-subtitles'
+import { upscaleVideo } from '../services/video-upscale.js'
 import os from 'os'
 
 /** ffmpeg filtergraph 里的路径转义：反斜杠换正斜杠，转义冒号和单引号，空格用 \ 转（避免参数被截断） */
@@ -895,7 +896,8 @@ app.delete('/projects/:id', async (c) => {
 app.post('/projects', async (c) => {
   let body: any
   try { body = await c.req.json() } catch (err: any) { return badRequest(c, `请求体不是 JSON: ${err?.message}`) }
-  if (!body?.song?.data) return badRequest(c, '缺 song.data（歌的 base64/data URL）')
+  const kind = String(body?.kind || 'song') === 'dance' ? 'dance' : 'song'
+  if (kind === 'song' && !body?.song?.data) return badRequest(c, '缺 song.data（歌的 base64/data URL）')
   const maxShot = Math.min(HARD_MAX_S, Math.max(5, Number(body.max_shot_seconds) || DEFAULT_MAX_S))
   const ts = now()
   try {
@@ -916,6 +918,7 @@ app.post('/projects', async (c) => {
       lyrics: String(body.lyrics || '').slice(0, 8000),
       style: String(body.style || '').slice(0, 60),
       storyPrompt: String(body.story_prompt || '').slice(0, 20000),
+      kind,
       aspectRatio: String(body.aspect_ratio || '16:9').slice(0, 10),   // 2026-10-19 新建默认 16:9（横屏）
       maxShotSeconds: maxShot,
       status: 'draft',
@@ -923,6 +926,10 @@ app.post('/projects', async (c) => {
     })
     const id = getInsertId(res)
     const rel = mvDir(id)
+    if (kind === 'dance') {
+      logTaskSuccess('MV', 'create-project', { id, kind })
+      return created(c, { id, kind, song_seconds: 0 })
+    }
     const srcExt = String(body.song.name || '').toLowerCase().endsWith('.wav') ? '.wav' : '.mp3'
     const songRel = `${rel}/song_src${srcExt}`
     fs.writeFileSync(getAbsolutePath(songRel), b64ToBuffer(String(body.song.data)))
@@ -935,6 +942,86 @@ app.post('/projects', async (c) => {
     logTaskError('MV', 'create-project', { error: err?.message })
     return serverError(c, err?.message || '建 MV 项目失败')
   }
+})
+
+
+/** 舞蹈 MV：上传参考视频 → 自动适配备份（全尺寸源片 + 半分辨率参考）→ 推 4080 → 按视频自然切段 */
+app.post('/projects/:id/dance', async (c) => {
+  const id = Number(c.req.param('id'))
+  const project = await loadProject(id)
+  if (!project) return notFound(c, 'MV 项目不存在')
+  let body: any
+  try { body = await c.req.json() } catch (err: any) { return badRequest(c, `请求体不是 JSON: ${err?.message}`) }
+  if (!body?.video?.data) return badRequest(c, '缺 video.data（参考视频 base64/data URL）')
+  const [W, H] = videoSize(project)
+  try {
+    const rel = mvDir(id)
+    const ext = (String(body.video.name || '').toLowerCase().match(/\.(mp4|mov|mkv|webm)$/) || [, 'mp4'])[1]
+    const origRel = `${rel}/dance_orig.${ext}`
+    fs.writeFileSync(getAbsolutePath(origRel), b64ToBuffer(String(body.video.data)))
+    const full = getAbsolutePath(origRel)
+    const meta = await probeVideoMeta(full)
+    if (!meta.seconds) return badRequest(c, '读不出视频时长（文件可能损坏）')
+    const totalFrames = Math.max(24, Math.round(meta.seconds * 24))
+    if (totalFrames < 124) return badRequest(c, '参考视频太短：H3 单段最少 124 帧（5.17 秒）')
+    const srcRel = `${rel}/dance_src.mov`
+    const refRel = `${rel}/dance_ref.mov`
+    await toDanceMov(full, getAbsolutePath(srcRel), W, H)
+    await toDanceMov(full, getAbsolutePath(refRel), Math.round(W * DANCE_REF_SCALE), Math.round(H * DANCE_REF_SCALE))
+    const srcName = `mv_p${id}_dance_src.mov`
+    const refName = `mv_p${id}_dance_ref.mov`
+    await shimPost('/v2/mv/video', { name: srcName, data: readAsDataUrl(srcRel, 'video/quicktime') })
+    await shimPost('/v2/mv/video', { name: refName, data: readAsDataUrl(refRel, 'video/quicktime') })
+    await db.update(schema.mvProjects).set({
+      kind: 'dance', danceSource: srcName, danceRefSource: refName, danceFrames: totalFrames,
+      songSeconds: Math.round((totalFrames / 24) * 1000) / 1000, updatedAt: now(),
+    } as any).where(eq(schema.mvProjects.id, id))
+    // 自然切段：清旧段 → 按 17n+5 网格 + 每段 ≤345 帧重排
+    const segs = planDanceSegments(totalFrames)
+    const ts = now()
+    await db.delete(schema.mvShots).where(eq(schema.mvShots.projectId, id))
+    for (const g of segs) {
+      await db.insert(schema.mvShots).values({
+        projectId: id, shotNumber: g.index,
+        startSeconds: g.startFrame / 24, endSeconds: (g.startFrame + g.frames) / 24,
+        frames: g.frames, seconds: Math.round((g.frames / 24) * 1000) / 1000,
+        shotSize: 'medium-wide', camera: 'static', vocalState: 'non_vocal',
+        status: 'pending', createdAt: ts, updatedAt: ts,
+      } as any)
+    }
+    logTaskSuccess('MV', 'dance-upload', { id, frames: totalFrames, shots: segs.length })
+    return success(c, {
+      frames: totalFrames, seconds: Math.round((totalFrames / 24) * 1000) / 1000,
+      source: srcName, ref: refName, shots: segs,
+    })
+  } catch (err: any) {
+    logTaskError('MV', 'dance-upload', { id, error: err?.message })
+    return serverError(c, err?.message || '舞蹈视频适配失败')
+  }
+})
+
+/** 舞蹈 MV：用项目里的人物/场景提示词，给每段编译英文六段稿（动作来源写死 <Video 1>） */
+app.post('/projects/:id/dance-prompts', async (c) => {
+  const id = Number(c.req.param('id'))
+  const project = await loadProject(id)
+  if (!project) return notFound(c, 'MV 项目不存在')
+  const shots = await db.select().from(schema.mvShots)
+    .where(eq(schema.mvShots.projectId, id)).orderBy(schema.mvShots.shotNumber)
+  if (!shots.length) return badRequest(c, '还没有段，先上传参考视频')
+  const total = shots.length
+  let n = 0
+  for (const sh of shots) {
+    const text = compileDancePrompt({
+      characterPrompt: project.characterPrompt || '', scenePrompt: project.scenePrompt || '',
+      style: project.style || '', frames: Number(sh.frames) || 124,
+      shotNo: Number(sh.shotNumber) || 1, totalShots: total,
+    })
+    await db.update(schema.mvShots).set({ promptEn: text, prompt: text, updatedAt: now() })
+      .where(eq(schema.mvShots.id, sh.id))
+    n++
+  }
+  logTaskSuccess('MV', 'dance-prompts', { id, shots: n })
+  return success(c, { count: n })
 })
 
 /** 改项目（标题 / 风格 / 分镜提示词 / 想法 / 歌词 / 最长切分） */
@@ -1200,6 +1287,120 @@ const imageSizeForAsset = (project: any, kind: string): string =>
 function videoSize(project: any): [number, number] {
   return String(project?.aspectRatio || '16:9') === '16:9' ? [1344, 768] : [768, 1344]
 }
+
+// ---------------------------------------------------------------- 舞蹈 MV（V2V 复刻，2026-10-23）
+// 机制：源片压 latent 后只去噪 99.95% → 动作来自原片像素；参考视频另给一份半分辨率副本
+// 只提供编排/节奏线索（省一半注意力开销）；人物靠 RefMods 卡锁；主生成完中转自动接修脸。
+const DANCE_MODEL = 'minimax-h3-mv-dance'
+const DANCE_MAX_FRAMES = 345          // 14.375s（H3 单段上限内最大的 17n+5 档）
+const DANCE_REF_SCALE = 0.5           // 参考副本 = 生成尺寸的一半
+
+function probeVideoMeta(file: string): Promise<{ seconds: number; frames: number; fps: number }> {
+  return new Promise((resolve) => {
+    ffmpeg.ffprobe(file, (err: any, meta: any) => {
+      if (err) return resolve({ seconds: 0, frames: 0, fps: 0 })
+      const seconds = Number(meta?.format?.duration) || 0
+      let frames = 0
+      let fps = 24
+      for (const s of meta?.streams || []) {
+        if (s.codec_type !== 'video') continue
+        frames = Number(s.nb_frames) || 0
+        const r = String(s.r_frame_rate || '24/1').split('/')
+        fps = Number(r[0]) / (Number(r[1]) || 1) || 24
+      }
+      if (!frames) frames = Math.round(seconds * fps)
+      resolve({ seconds, frames, fps })
+    })
+  })
+}
+
+/** 源片 → H3 用的 24fps CFR mov（PCM 32k 单声道），按目标尺寸等比放大后居中裁切 */
+function toDanceMov(input: string, output: string, w: number, h: number): Promise<void> {
+  return new Promise((resolve, reject) => {
+    ffmpeg(input)
+      .outputOptions([
+        '-vf', `scale=${w}:${h}:force_original_aspect_ratio=increase,crop=${w}:${h}`,
+        '-r', '24', '-pix_fmt', 'yuv420p', '-crf', '16',
+      ])
+      .videoCodec('libx264')
+      .audioCodec('pcm_s16le').audioFrequency(32000).audioChannels(1)
+      .format('mov')
+      .on('end', () => resolve())
+      .on('error', (err: Error) => reject(err))
+      .save(output)
+  })
+}
+
+/**
+ * 按参考视频自然切段：每段吸附 17n+5 网格、≤345 帧、尽量等长。
+ * 注意 H3 只认网格帧数，源片总帧数一般不在网格上 → 末尾不足一段的零头**直接丢弃**
+ * （最多 123 帧 ≈ 5.1 秒），不做「合并进上一段」——那会把上一段顶出网格（自检抓到的 bug）。
+ */
+function planDanceSegments(total: number): { index: number; startFrame: number; frames: number; dropped: number }[] {
+  const snapUp = (frames: number) => {
+    const k = Math.max(7, Math.round((frames - 5) / 17))
+    return Math.min(DANCE_MAX_FRAMES, 5 + 17 * k)
+  }
+  const snapDown = (frames: number) => {
+    const k = Math.max(7, Math.floor((frames - 5) / 17))
+    return Math.min(DANCE_MAX_FRAMES, 5 + 17 * k)
+  }
+  const out: { index: number; startFrame: number; frames: number; dropped: number }[] = []
+  let start = 0
+  while (total - start >= 124) {
+    const remain = total - start
+    const left = Math.ceil(remain / DANCE_MAX_FRAMES)
+    let frames = snapUp(Math.round(Math.min(remain / left, DANCE_MAX_FRAMES)))
+    if (frames > remain) frames = snapDown(remain)
+    if (frames < 124) break
+    out.push({ index: out.length + 1, startFrame: start, frames, dropped: 0 })
+    start += frames
+  }
+  out.forEach((g) => { g.dropped = 0 })
+  if (out.length) out[out.length - 1].dropped = Math.max(0, total - start)
+  return out
+}
+
+/**
+ * 舞蹈段提示词（英文六段式）：动作来源写死 <Video 1>，人物/场景措辞直接沿用项目里那套字段，
+ * 音频声明 <Audio 1>（分段 = 源片同一时间窗的原音，成片顺序拼接即成完整原声）。
+ */
+function compileDancePrompt(p: { characterPrompt?: string; scenePrompt?: string; style?: string; frames: number; shotNo: number; totalShots: number }): string {
+  const who = String(p.characterPrompt || '').replace(/\s+/g, ' ').trim()
+    || 'a young woman, short black chin-length hair parted to one side, calm steady gaze'
+  const scene = String(p.scenePrompt || '').replace(/\s+/g, ' ').trim()
+    || 'a clean outdoor location with even overcast daylight'
+  const style = String(p.style || '').trim() || 'photoreal'
+  const secs = (p.frames / 24).toFixed(2)
+  const part = `segment ${p.shotNo} of ${p.totalShots}`
+  return [
+    'subject_definitions:',
+    `<Subject 1> is the performer whose identity is locked by the identity card and whose body, outfit and styling come from <Picture 1>: ${who}.`,
+    `<Video 1> is the source dance video for the target edit, providing the choreography, body motion, expression timing, subject positioning, camera framing, camera movement, perspective, pacing and temporal structure.`,
+    `<Audio 1> is the synchronized audio track of <Video 1> and is reused as the complete final audio track.`,
+    'summary:',
+    `[video editing + reference generation + audio reuse] The target video is an edited ${part} (${secs} seconds) of <Video 1>. The original performer is replaced throughout by <Subject 1>, whose identity comes from the identity card and whose body, outfit and styling come from <Picture 1>, while her motion and performance follows <Video 1>. The location is ${scene}.`,
+    'retention_analysis:',
+    '<Subject 1> (appears in [Shot 1]): fully_preserved - identity from the identity card, body, outfit and styling from <Picture 1>, unchanged from the first frame to the last.',
+    '<Video 1> (appears in [Shot 1]): fully_preserved - choreography, body motion, expression timing, subject positioning, camera framing, camera movement and pacing are retained unchanged in every frame.',
+    '<Audio 1> (appears in [Shot 1]): fully_copy - the audio of <Audio 1> is reused unchanged as the complete final audio track.',
+    'detailed_description:',
+    `The target video is a ${style} dance clip in even overcast daylight with soft shadowless light.`,
+    `[Shot 1] A static medium-wide shot frames <Subject 1> from head to feet at the same distance, height and angle as <Video 1>, with ${scene} behind her.`,
+    `She wears exactly the outfit of <Picture 1>, and the fabric creases and folds move the way they move on the real garment.`,
+    `Throughout the whole take she performs the exact choreography of <Video 1>: her feet land on the same frames and on the same spots, her knees bend and straighten through the same amplitude, her hips travel the same path and distance, her torso turns and counter-turns at the same instants, her arms open and close through the same arcs at the same height, her wrists and hands reach the same positions relative to her body, her head follows the same directions, and her weight shifts from one leg to the other on the same frames, so every body position in every frame matches the corresponding frame of <Video 1>.`,
+    'The camera holds the framing of <Video 1> for the whole take with the same height, distance and background layout, at the same framing amplitude and the same static speed, so there is no added pan, no tilt, no zoom and no push in.',
+    'Her hair and loose cuffs swing with each direction change, her soft diffuse shadow slides across the ground under her shoes, and she keeps a calm steady expression throughout the take.',
+    'The light stays flat and shadowless for the whole take, the sky fills the same portion of the frame as in <Video 1>, and the background elements hold the same positions and the same scale in every frame, so the location reads as one continuous place.',
+    'Her silhouette matches <Video 1> frame for frame, the hem, pockets and rolled cuffs of the outfit keep their shape while she moves, the cloth wrap stays on the same wrist, and skin tones and fabric colours stay consistent with <Picture 1> from the first frame to the last.',
+    'The image stays clean and sharp, the limbs stay intact through the fast passages, the joints hold their shape at the extremes of each pose, and only <Subject 1> is present in the frame from beginning to end.',
+    'overall_soundscape:',
+    'The complete audio of <Audio 1> is reused unchanged as the final audio track, including its music, its room tone and its ambient sound, with no added or regenerated sound.',
+    'non_diegetic_music:',
+    'The complete music of <Audio 1> is reused unchanged and is the only music track in the target video.',
+  ].join('\n')
+}
+
 
 /**
  * 后台出图排队：同一个项目里的出图请求按点击顺序**串行**跑（图片通道一次只吃一个任务），
@@ -1958,7 +2159,11 @@ app.post('/projects/:id/shots/:sid/check', async (c) => {
   }
 })
 
-/** 超分到 1080p：成片高度不够就按比例放大（lanczos + 轻锐化），落一条新成片记录 */
+/**
+ * 超分到 1080p：等比例放大（原始什么比例就用什么比例），落一条新成片记录。
+ * 2026-10-22：原来锁高度 scale=-2:1080 + 判 height≥1080 ⇒ 竖屏源反而被缩小。
+ * 改为短边放到 1080：竖屏 768×1344 → 1080×1890，横屏 1344×768 → 1890×1080。
+ */
 app.post('/projects/:id/upscale', async (c) => {
   const id = Number(c.req.param('id'))
   const project = await loadProject(id)
@@ -1966,37 +2171,20 @@ app.post('/projects/:id/upscale', async (c) => {
   const body: any = await c.req.json().catch(() => ({}))
   const srcRel = String(body.url || project.outputUrl || '')
   if (!srcRel || !fs.existsSync(getAbsolutePath(srcRel))) return badRequest(c, '还没有成片可超分 —— 先拼接')
-  const src = getAbsolutePath(srcRel)
-  const dim = await new Promise<{ w: number; h: number; dur: number }>((res) =>
-    ffmpeg.ffprobe(src, (e: any, m: any) => {
-      const v = (m?.streams || []).find((x: any) => x.codec_type === 'video')
-      res({ w: Number(v?.width) || 0, h: Number(v?.height) || 0, dur: Number(m?.format?.duration) || 0 })
-    }))
-  if (!dim.h) return serverError(c, '读不到成片画面尺寸')
-  if (dim.h >= 1080) return badRequest(c, `这条已经 ${dim.w}×${dim.h}，高度 ≥1080，不用再超分`)
-  const rel = mvDir(id)
-  const outName = `mv_1080_${Date.now()}.mp4`
-  const outAbs = path.join(STORAGE_ROOT, rel, outName)
   try {
-    await new Promise<void>((resolve, reject) => {
-      ffmpeg(src)
-        // -2 保证宽度是偶数；lanczos 比默认 bicubic 锐，unsharp 补一点边缘（后再放大不明显）
-        .outputOptions(['-vf', 'scale=-2:1080:flags=lanczos,unsharp=5:5:0.5:5:5:0', '-c:v', 'libx264', '-crf', '18',
-          '-preset', 'medium', '-pix_fmt', 'yuv420p', '-c:a', 'copy', '-movflags', '+faststart'])
-        .on('end', () => resolve()).on('error', (e: Error) => reject(new Error(`超分失败：${e.message}`))).save(outAbs)
+    const rel = mvDir(id)
+    const r = await upscaleVideo(srcRel, rel, 'mv_1080_')
+    await db.insert(schema.mvMerges).values({
+      // shot_ids 里打 `upscaled` 标记：前端据此把这条的「超分 1080p」按钮置灰，不用再去探一次分辨率
+      projectId: id, shotIds: JSON.stringify(['upscaled']), mergedUrl: r.outRel,
+      seconds: Number(r.from.duration || 0), status: 'completed', createdAt: now(),
     })
+    logTaskSuccess('MV', 'upscale', { id, from: `${r.from.w}x${r.from.h}`, to: `${r.to.w}x${r.to.h}` })
+    return success(c, { output_url: r.outRel, seconds: Number(r.from.duration || 0), width: r.to.w, height: r.to.h })
   } catch (err: any) {
     logTaskError('MV', 'upscale', { id, error: err?.message })
-    return serverError(c, err?.message || '超分失败')
+    return badRequest(c, err?.message || '超分失败')
   }
-  const outRel = `${rel}/${outName}`
-  await db.insert(schema.mvMerges).values({
-    // shot_ids 里打 `upscaled` 标记：前端据此把这条的「超分 1080p」按钮置灰，不用再去探一次分辨率
-    projectId: id, shotIds: JSON.stringify(['upscaled']), mergedUrl: outRel,
-    seconds: Number(dim.dur || 0), status: 'completed', createdAt: now(),
-  })
-  logTaskSuccess('MV', 'upscale', { id, from: `${dim.w}x${dim.h}`, to: '1080p' })
-  return success(c, { output_url: outRel, seconds: Number(dim.dur || 0) })
 })
 
 /** 歌词自动对轴：把纯歌词 + 人声轨送到 服务器跑 Whisper，回传 LRC（存在项目上，合成时烧字幕） */
@@ -2231,22 +2419,47 @@ app.post('/projects/:id/shots/:sid/render', async (c) => {
   if (!picked.length) return badRequest(c, '这一段还没有可用的参考图（先给人物/场景出图，或在这一段勾选绑定）')
   const refs: string[] = picked.map((a) => readAsDataUrl(a.image, 'image/png'))
   const cards = picked.map((a) => a.card).filter(Boolean) as string[]
+  const isDance = String(project.kind || 'song') === 'dance'
+  const frames = Number(shot.frames) || snapFrames(Number(shot.seconds) || 5.167)
+  const [VW, VH] = videoSize(project)
+  if (isDance && (!project.danceSource || !project.danceRefSource)) {
+    return badRequest(c, '舞蹈 MV 还没上传参考视频（先上传，后台会自动适配备份）')
+  }
+  // 舞蹈段：提示词缺失就现场按项目的人物/场景字段编译（动作来源写死 <Video 1>）
+  if (isDance && !String(shot.promptEn || '').includes('<Video 1>')) {
+    const all = await db.select().from(schema.mvShots).where(eq(schema.mvShots.projectId, id))
+    const danceText = compileDancePrompt({
+      characterPrompt: project.characterPrompt || '', scenePrompt: project.scenePrompt || '',
+      style: project.style || '', frames,
+      shotNo: Number(shot.shotNumber) || 1, totalShots: all.length || 1,
+    })
+    await db.update(schema.mvShots).set({ promptEn: danceText, prompt: danceText, updatedAt: now() })
+      .where(eq(schema.mvShots.id, sid))
+    shot.promptEn = danceText
+  }
   try {
     const taskId = await generateVideo({
       prompt: String(shot.promptEn || shot.prompt || ''),
-      model: MV_MODEL,
+      model: isDance ? DANCE_MODEL : MV_MODEL,
       configId: project.videoConfigId ?? undefined,
-      duration: Math.max(5.167, Number(shot.seconds) || 5.167),
+      duration: Math.max(5.167, frames / 24),
       aspectRatio: project.aspectRatio || '16:9',
-      resolution: `${videoSize(project)[0]}x${videoSize(project)[1]}`,
+      resolution: `${VW}x${VH}`,
       referenceImageUrls: refs,
       seed: body.seed ? Number(body.seed) : undefined,
       // MV 专用字段（适配器原样并进请求体；短剧路径不传这些）
-      mvExtras: {
+      mvExtras: isDance ? {
+        dance_source: project.danceSource,
+        dance_ref_source: project.danceRefSource,
+        dance_start_frame: Math.round((Number(shot.startSeconds) || 0) * 24),
+        mv_frames: frames,
+        mv_width: VW, mv_height: VH,
+        refmod_files: cards,
+      } : {
         mv_audio: { name: await ensureRemoteSong(project) },
         mv_start_seconds: Number(shot.startSeconds) || 0,
-        mv_frames: Number(shot.frames) || snapFrames(Number(shot.seconds) || 5.167),
-        mv_width: videoSize(project)[0], mv_height: videoSize(project)[1],
+        mv_frames: frames,
+        mv_width: VW, mv_height: VH,
         refmod_files: cards,
       },
     })
@@ -2308,6 +2521,55 @@ app.post('/projects/:id/assemble', async (c) => {
   const ready = shots.filter((s) => s.videoUrl)
   const done = ids.length ? ready.filter((s) => ids.includes(s.id)) : ready
   if (!done.length) return badRequest(c, ids.length ? '勾选的镜头里没有已生成的分段' : '还没有生成好的分段')
+  const isDance = String(project.kind || 'song') === 'dance'
+  if (isDance) {
+    // 舞蹈 MV：各段自带参考视频原音 → 顺序拼接即可，不混原曲、不烧字幕
+    const relD = mvDir(id)
+    const outNameD = `mv_dance_final_${Date.now()}.mp4`
+    const outAbsD = path.join(STORAGE_ROOT, relD, outNameD)
+    const FPS = 24
+    const durOfD = (f: string) => new Promise<number>((res) =>
+      ffmpeg.ffprobe(f, (e: any, m: any) =>
+        res(e ? 0 : Number((m?.streams || []).find((x: any) => x.codec_type === 'video')?.duration) || 0)))
+    try {
+      const filesD: string[] = []
+      const chainsD: string[] = []
+      let totalD = 0
+      for (let i = 0; i < done.length; i++) {
+        const abs = getAbsolutePath(done[i].videoUrl as string)
+        filesD.push(abs)
+        const sec = Number(done[i].seconds) || (Number(done[i].frames) || 124) / FPS
+        const dur = await durOfD(abs)
+        const need = Math.max(1, Math.round(Math.min(sec, dur || sec) * FPS))
+        chainsD.push(`[${i}:v]trim=start_frame=0,setpts=PTS-STARTPTS,tpad=stop_mode=clone:stop_duration=3,trim=end_frame=${need},setpts=PTS-STARTPTS,fps=${FPS},setsar=1[v${i}]`)
+        chainsD.push(`[${i}:a]atrim=start=0:duration=${(need / FPS).toFixed(4)},asetpts=PTS-STARTPTS,aresample=32000[a${i}]`)
+        totalD += need / FPS
+      }
+      const graphD = `${chainsD.join(';')};${done.map((_: any, i: number) => `[v${i}][a${i}]`).join('')}concat=n=${done.length}:v=1:a=1[vout][aout]`
+      await new Promise<void>((resolve, reject) => {
+        let cmd = ffmpeg()
+        for (const f of filesD) cmd = cmd.input(f)
+        cmd.complexFilter(graphD)
+          .outputOptions(['-map', '[vout]', '-map', '[aout]', '-c:v', 'libx264', '-crf', '20',
+            '-preset', 'veryfast', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-b:a', '192k',
+            '-movflags', '+faststart'])
+          .on('end', () => resolve()).on('error', (e: Error) => reject(new Error(`拼接失败：${e.message}`)))
+          .save(outAbsD)
+      })
+    } catch (err: any) {
+      logTaskError('MV', 'assemble-dance', { id, error: err?.message })
+      return serverError(c, err?.message)
+    }
+    const outRelD = `${mvDir(id)}/${outNameD}`
+    await db.insert(schema.mvMerges).values({
+      projectId: id, shotIds: JSON.stringify(done.map((s) => s.id)), mergedUrl: outRelD,
+      seconds: done.reduce((a, s) => a + (Number(s.seconds) || 0), 0), status: 'completed', createdAt: now(),
+    } as any)
+    await db.update(schema.mvProjects).set({ outputUrl: outRelD, status: 'done', updatedAt: now() })
+      .where(eq(schema.mvProjects.id, id))
+    logTaskSuccess('MV', 'assemble-dance', { id, shots: done.length })
+    return success(c, { output_url: outRelD, seconds: done.reduce((a, s) => a + (Number(s.seconds) || 0), 0) })
+  }
   // 原曲文件丢了（实测 mv/p1/song_src.mp3 被清掉过）→ 先找同目录的 song_src.wav / .mp3 兜底，再报人话
   const songRel = (() => {
     const cur = String(project.songFile || '')
@@ -2401,4 +2663,5 @@ app.post('/projects/:id/assemble', async (c) => {
 })
 
 export default app
-export { parseLrcLines, planSegmentsByLines, lyricsInWindow, salvageWhat, localPromptProblems, propNameKeys }   // 给自检脚本用
+export { parseLrcLines, planSegmentsByLines, lyricsInWindow, salvageWhat, localPromptProblems, propNameKeys,
+         planDanceSegments, compileDancePrompt }   // 给自检脚本用

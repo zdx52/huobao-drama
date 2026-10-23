@@ -379,8 +379,15 @@
               <input v-model.trim="form.title" class="input" placeholder="例：MV1 / 翻到那一页" />
             </label>
             <label class="field">
-              <span class="field-label">歌文件（mp3/wav）<span class="required">*</span></span>
-              <input class="input" type="file" accept="audio/*" @change="onSong" />
+              <span class="field-label">类型</span>
+              <BaseSelect v-model="form.kind" :options="KINDS" placeholder="选类型" />
+              <span class="field-hint">{{ form.kind === 'dance'
+                ? 'MV 舞蹈：给一段参考舞蹈视频（自带音乐），后台自动适配尺寸并按动作自然切段，人物卡锁人'
+                : '唱歌 MV：给一首歌，按人声能量切镜头' }}</span>
+            </label>
+            <label class="field">
+              <span class="field-label">{{ form.kind === 'dance' ? '参考舞蹈视频（mp4/mov）' : '歌文件（mp3/wav）' }}<span class="required">*</span></span>
+              <input class="input" type="file" :accept="form.kind === 'dance' ? 'video/*' : 'audio/*'" @change="onSong" />
               <span v-if="form.song" class="field-hint">已选：{{ form.song.name }}</span>
             </label>
             <label class="field">
@@ -392,12 +399,12 @@
               <BaseSelect v-model="form.aspectRatio" :options="RATIOS" placeholder="选画幅" />
               <span class="field-hint">人物板固定 16:9；场景图和成片按这个比例</span>
             </label>
-            <label class="field">
+            <label v-if="form.kind !== 'dance'" class="field">
               <span class="field-label">分镜提示词（先空着也行，进项目再写）</span>
               <textarea v-model="form.storyPrompt" class="textarea" rows="4"
                 placeholder="例：开场雨夜的城市街道，主角撑伞独行；副歌切到房间里翻旧照片……"></textarea>
             </label>
-            <label class="field">
+            <label v-if="form.kind !== 'dance'" class="field">
               <span class="field-label">最长切分（秒，默认 10，最大 15）</span>
               <input v-model.number="form.maxShotSeconds" class="input" type="number" min="5" max="15" step="0.5" style="width:110px" />
             </label>
@@ -485,7 +492,11 @@ const assetTabs = [
   { label: '人物', value: 'character' },
   { label: '场景', value: 'scene' },
 ]
-const form = reactive({ title: '', style: '', storyPrompt: '', aspectRatio: '16:9', maxShotSeconds: 10, song: null })
+const KINDS = [
+  { label: '唱歌 MV', value: 'song' },
+  { label: 'MV 舞蹈（复刻参考视频动作）', value: 'dance' },
+]
+const form = reactive({ title: '', style: '', storyPrompt: '', aspectRatio: '16:9', maxShotSeconds: 10, song: null, kind: 'song' })
 
 const styleOptions = computed(() => presets.value.map((p) => ({ label: p.name, value: p.value })))
 const styleLabel = (key) => presets.value.find((p) => p.value === key)?.name || key || ''
@@ -551,6 +562,7 @@ function openCreate() {
   form.aspectRatio = series.value?.aspectRatio || '16:9'
   form.style = series.value?.style || (presets.value[0]?.value || '')
   form.maxShotSeconds = 10
+  form.kind = 'song'
   showCreate.value = true
 }
 function onSong(e) {
@@ -569,6 +581,23 @@ async function createSong() {
   if (!form.song || !form.title) return
   creating.value = true
   try {
+    // MV 舞蹈：先建项目（无歌），再把参考视频交给后台适配 + 自动切段
+    if (form.kind === 'dance') {
+      const r = await api.post('/mv/projects', {
+        series_id: seriesId,
+        title: form.title,
+        style: form.style,
+        aspect_ratio: form.aspectRatio,
+        kind: 'dance',
+      })
+      if (!r?.id) throw new Error('建项目没返回 id')
+      await api.post(`/mv/projects/${r.id}/dance`, {
+        video: { name: form.song.name || 'dance.mp4', data: await toBase64(form.song) },
+      })
+      showCreate.value = false
+      navigateTo(`/mv/${r.id}`)
+      return
+    }
     const r = await api.post('/mv/projects', {
       series_id: seriesId,
       title: form.title,

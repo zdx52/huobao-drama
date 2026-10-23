@@ -47,6 +47,22 @@
           </template>
         </span>
         <template v-if="tab === 'video'">
+          <!-- 舞蹈 MV：参考视频上传（后台自动适配尺寸 + 按动作自然切段） -->
+          <template v-if="isDance">
+            <input ref="danceInput" type="file" accept="video/*" style="display:none" @change="uploadDanceVideo" />
+            <button class="btn btn-sm btn-primary" :disabled="busy" @click="danceInput && danceInput.click()"
+              :title="pj.danceSource ? '换一段参考舞蹈视频（会重建所有段，已生成的视频不删）' : '上传参考舞蹈视频：后台自动转尺寸、切段'">
+              {{ pj.danceSource ? '换参考视频' : '上传参考视频' }}
+            </button>
+            <span class="field-hint" v-if="pj.danceSource">
+              源片 {{ pj.danceFrames || 0 }} 帧 · {{ ((pj.danceFrames || 0) / 24).toFixed(1) }}s · {{ shots.length }} 段
+            </span>
+            <button class="btn btn-sm" @click="compileDancePrompts" :disabled="busy || !shots.length"
+              title="用项目里的人物/场景提示词，把每段的英文六段稿编译出来（动作来源写死 <Video 1>）">
+              编译舞蹈提示词
+            </button>
+          </template>
+          <template v-else>
           <button class="btn btn-sm" :class="{ 'is-on': !!pj.vocalStem }" @click="askSeparate" :disabled="busy || separating"
             :title="pj.vocalStem ? '已分离：' + pj.vocalStem : '用 demucs 分出人声轨，供唱/非唱判据用'">
             {{ separating ? '分离中…' : (pj.vocalStem ? '已分离人声' : '人声分离') }}
@@ -54,11 +70,12 @@
           <input v-model.number="maxSeconds" class="input mv-num" type="number" min="5" max="15" step="0.5" title="最长切分（秒，H3 上限 15）" />
           <button class="btn btn-sm" @click="genShots" :disabled="busy || !pj.vocalStem"
             :title="pj.vocalStem ? (shots.length ? '按人声轨重新切分（会重建现有分镜）' : '按人声轨切分并标唱/非唱') : '先做人声分离——分镜的唱/非唱要靠人声轨判断'">{{ shots.length ? '重新拆分' : '拆分分镜' }}</button>
+          </template>
           <label class="field-hint" style="display:inline-flex;align-items:center;gap:4px;cursor:pointer"
             title="勾上＝全部重写（覆盖已生成的提示词）；不勾＝只补还没有提示词的段">
             <input type="checkbox" v-model="rewriteAll" />全部重写
           </label>
-          <button class="btn btn-sm" @click="askGenPrompts" :disabled="busy || !shots.length"
+          <button v-if="!isDance" class="btn btn-sm" @click="askGenPrompts" :disabled="busy || !shots.length"
             :title="rewriteAll ? '按当前人物/场景/分镜全部重写一遍（会覆盖已生成的提示词）' : '只给还没有提示词的分镜补上；已生成的不动（要重写请勾左边「全部重写」）'">
             {{ rewriteAll ? '全部重写提示词' : '批量补齐提示词' }}
           </button>
@@ -354,7 +371,7 @@
             </div>
             <div class="merge-card-meta">
               <span class="mono">{{ mergeTitle(m) }}</span>
-              <button class="btn btn-sm" :disabled="busy || isUpscaled(m)" :title="isUpscaled(m) ? '这条已经是 1080p' : '按比例放大到高 1080'"
+              <button class="btn btn-sm" :disabled="busy || isUpscaled(m)" :title="isUpscaled(m) ? '这条已经是 1080p' : '等比例放大到 1080p（保持原始画幅比例）'"
                 @click.stop="upscaleMerge(m)">{{ isUpscaled(m) ? '已 1080p' : '超分 1080p' }}</button>
               <a :href="staticUrl(m.mergedUrl)" download class="btn btn-sm" @click.stop>下载</a>
               <button class="btn btn-sm" @click.stop="askDeleteMerge(m)">删除</button>
@@ -1567,6 +1584,63 @@ function back() {
   else navigateTo('/mv')
 }
 
+const isDance = computed(() => String(pj.value.kind || 'song') === 'dance')
+const danceInput = ref(null)
+
+function readFileAsDataUrl(f) {
+  return new Promise((resolve, reject) => {
+    const fr = new FileReader()
+    fr.onload = () => resolve(String(fr.result))
+    fr.onerror = () => reject(new Error('读文件失败'))
+    fr.readAsDataURL(f)
+  })
+}
+
+function uploadDanceVideo(e) {
+  const el = e.target
+  const f = el.files?.[0]
+  el.value = ''
+  if (!f) return
+  askConfirm('上传参考视频',
+    '后台会把它转成 H3 要的 24fps 尺寸（全尺寸源片 + 半分辨率参考副本）并按动作重新切段，现有段会被重建。继续？',
+    '上传并适配', () => doUploadDance(f))
+}
+
+async function doUploadDance(f) {
+  busy.value = true
+  stepMsg.value = '上传参考视频 + 适配尺寸…'
+  try {
+    const r = await api.post(`/mv/projects/${pj.value.id}/dance`, {
+      video: { name: f.name || 'dance.mp4', data: await readFileAsDataUrl(f) },
+    })
+    promptResult.value = {
+      ok: true,
+      text: `✓ 适配完成 · ${r?.frames || 0} 帧 / ${(Number(r?.seconds || 0)).toFixed(1)}s · 切成 ${(r?.shots || []).length} 段`,
+    }
+    await refresh()
+  } catch (err) {
+    promptResult.value = { ok: false, text: String(err?.message || err) }
+  } finally {
+    busy.value = false
+    stepMsg.value = ''
+  }
+}
+
+async function compileDancePrompts() {
+  busy.value = true
+  stepMsg.value = '按人物/场景编译舞蹈提示词…'
+  try {
+    const r = await api.post(`/mv/projects/${pj.value.id}/dance-prompts`, {})
+    promptResult.value = { ok: true, text: `✓ 已编译 ${r?.count || 0} 段提示词（逐段可编辑）` }
+    await refresh()
+  } catch (err) {
+    promptResult.value = { ok: false, text: String(err?.message || err) }
+  } finally {
+    busy.value = false
+    stepMsg.value = ''
+  }
+}
+
 async function refresh() {
   // 不能用 call()：它是"全局忙"包装，finally 会把 busy 清掉 → 外层循环的进度条中途消失（实测批量补齐/单段生成）
   const r = await api.get(`/mv/projects/${pj.value.id}`).catch(() => null)
@@ -1604,14 +1678,14 @@ function isUpscaled(m) {
   return marked || /mv_1080_/.test(String(m?.mergedUrl || ''))
 }
 
-/** 超分到 1080p（草稿：成片高度不够就放大，落成新的一条成片记录） */
+/** 超分到 1080p（等比例放大：原始什么比例就用什么比例），落成新的一条成片记录 */
 async function upscaleMerge(m) {
-  const r = await call(() => api.post(`/mv/projects/${pj.value.id}/upscale`, { url: m.mergedUrl }), '正在超分到 1080p…')
+  const r = await call(() => api.post(`/mv/projects/${pj.value.id}/upscale`, { url: m.mergedUrl }), '正在等比例超分到 1080p…')
   if (r?.output_url) {
     await refresh()
     exportPreview.value = { url: r.output_url, title: '1080p 成片' }
-    stepMsg.value = '已超分到 1080p'
-    setTimeout(() => { if (stepMsg.value === '已超分到 1080p') stepMsg.value = '' }, 2000)
+    stepMsg.value = `已超分到 ${r.width || ''}×${r.height || ''}`
+    setTimeout(() => { if (stepMsg.value.startsWith('已超分到')) stepMsg.value = '' }, 2000)
   }
 }
 

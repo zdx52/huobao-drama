@@ -1,8 +1,9 @@
 import { Hono } from 'hono'
 import { and, eq, isNull } from 'drizzle-orm'
-import { db, schema } from '../db/index.js'
-import { success, badRequest } from '../utils/response.js'
+import { db, getInsertId, schema } from '../db/index.js'
+import { success, badRequest, now } from '../utils/response.js'
 import { mergeEpisodeVideos } from '../services/ffmpeg-merge.js'
+import { upscaleVideo } from '../services/video-upscale.js'
 import { toSnakeCase } from '../utils/transform.js'
 import { logTaskError, logTaskStart, logTaskSuccess } from '../utils/task-logger.js'
 
@@ -70,6 +71,43 @@ app.delete('/episodes/:id/merges/:mergeId', async (c) => {
     .where(eq(schema.videoMerges.id, mergeId))
   logTaskSuccess('MergeAPI', 'delete-merge', { episodeId, mergeId })
   return success(c)
+})
+
+// POST /episodes/:id/merges/:mergeId/upscale — 把一条成片等比例超分到 1080p
+// 2026-10-22：原始什么比例就用什么比例（短边放到 1080，不裁切不补黑边）。
+// 落一条新的成片记录，原片保留。
+app.post('/episodes/:id/merges/:mergeId/upscale', async (c) => {
+  const episodeId = Number(c.req.param('id'))
+  const mergeId = Number(c.req.param('mergeId'))
+  if (!mergeId) return badRequest(c, '缺少成片 id')
+  const [row] = await db.select().from(schema.videoMerges).where(eq(schema.videoMerges.id, mergeId))
+  if (!row) return badRequest(c, '成片不存在')
+  if (row.episodeId !== episodeId) return badRequest(c, '成片不属于本集')
+  if (row.status !== 'completed' || !row.mergedUrl) return badRequest(c, '这条成片还没拼好，暂时不能超分')
+  try {
+    logTaskStart('MergeAPI', 'episode-upscale', { episodeId, mergeId })
+    const r = await upscaleVideo(row.mergedUrl, 'static/merged')
+    const res = await db.insert(schema.videoMerges).values({
+      episodeId,
+      dramaId: row.dramaId,
+      title: `Episode ${episodeId} 1080p`,
+      provider: 'ffmpeg',
+      model: 'ffmpeg-upscale-lanczos-1080p',
+      status: 'completed',
+      // scenes 里打 upscaled 标记：前端据此把这条的「超分 1080p」按钮置灰
+      scenes: JSON.stringify(['upscaled']),
+      mergedUrl: r.outRel,
+      duration: Math.round(r.from.duration || 0),
+      createdAt: now(),
+      completedAt: now(),
+    })
+    const newId = getInsertId(res)
+    logTaskSuccess('MergeAPI', 'episode-upscale', { episodeId, mergeId, newId, from: `${r.from.w}x${r.from.h}`, to: `${r.to.w}x${r.to.h}` })
+    return success(c, { merge_id: newId, merged_url: r.outRel, width: r.to.w, height: r.to.h })
+  } catch (err: any) {
+    logTaskError('MergeAPI', 'episode-upscale', { episodeId, mergeId, error: err.message })
+    return badRequest(c, err.message || '超分失败')
+  }
 })
 
 export default app

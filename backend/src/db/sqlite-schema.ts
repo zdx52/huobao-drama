@@ -388,6 +388,11 @@ export const sqliteSchemaStatements = [
   `ALTER TABLE mv_projects ADD COLUMN character_card TEXT`,
   `ALTER TABLE mv_projects ADD COLUMN scene_card TEXT`,
   `ALTER TABLE mv_projects ADD COLUMN outline TEXT`,
+  // 舞蹈 MV（2026-10-23 V2V 复刻路线）
+  `ALTER TABLE mv_projects ADD COLUMN kind TEXT DEFAULT 'song'`,
+  `ALTER TABLE mv_projects ADD COLUMN dance_source TEXT`,
+  `ALTER TABLE mv_projects ADD COLUMN dance_ref_source TEXT`,
+  `ALTER TABLE mv_projects ADD COLUMN dance_frames INTEGER`,
   `ALTER TABLE mv_shots ADD COLUMN outline_index INTEGER`,
   `ALTER TABLE mv_shots ADD COLUMN first_frame_image TEXT`,
   `ALTER TABLE mv_projects ADD COLUMN story_prompt TEXT`,   // 2026-10-18 用户填的 MV 分镜提示词（人物/场景从它提取）

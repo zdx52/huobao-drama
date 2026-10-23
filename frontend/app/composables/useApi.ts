@@ -170,6 +170,8 @@ export const mergeAPI = {
   status: (epId: number) => api.get(`/merge/episodes/${epId}/merge`),
   list: (epId: number) => api.get<any[]>(`/merge/episodes/${epId}/merges`),
   del: (epId: number, mergeId: number) => api.del(`/merge/episodes/${epId}/merges/${mergeId}`),
+  // 2026-10-22：等比例超分到 1080p（原始什么比例就用什么比例）
+  upscale: (epId: number, mergeId: number) => api.post(`/merge/episodes/${epId}/merges/${mergeId}/upscale`),
 }
 export const aiConfigAPI = {
   list: (t?: string) => api.get(`/ai-configs${t ? `?service_type=${t}` : ''}`),

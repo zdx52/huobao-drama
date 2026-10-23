@@ -1016,7 +1016,13 @@
       "markedDone": "已完成",
       "markDoneTitle": "手动标记本集导出完成（可再次点击取消）",
       "markedDoneToast": "已标记为完成",
-      "unmarkDoneToast": "已取消完成标记"
+      "unmarkDoneToast": "已取消完成标记",
+      "upscale": "超分 1080p",
+      "upscaling": "超分中…",
+      "upscaled": "已 1080p",
+      "upscaleTitle": "等比例放大到 1080p（保持原始画幅比例）",
+      "upscaleDone": "已超分到 {w}×{h}",
+      "upscaleFailed": "超分失败"
     },
     "image": {
       "generatingChar": "角色图片生成中",

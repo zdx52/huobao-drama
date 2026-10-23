@@ -1008,7 +1008,13 @@
       "markedDone": "完了",
       "markDoneTitle": "このエピソードの書き出しを手動で完了にします（再クリックで解除）",
       "markedDoneToast": "完了としてマークしました",
-      "unmarkDoneToast": "完了マークを解除しました"
+      "unmarkDoneToast": "完了マークを解除しました",
+      "upscale": "1080p にアップスケール",
+      "upscaling": "アップスケール中…",
+      "upscaled": "1080p",
+      "upscaleTitle": "元のアスペクト比を保ったまま 1080p に拡大",
+      "upscaleDone": "{w}×{h} にアップスケールしました",
+      "upscaleFailed": "アップスケールに失敗しました"
     },
     "image": {
       "generatingChar": "キャラクター画像を生成中",
