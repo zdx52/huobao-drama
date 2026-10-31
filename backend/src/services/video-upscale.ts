@@ -92,7 +92,9 @@ export async function upscaleVideo(
     ffmpeg(srcAbs)
       // lanczos 比默认双线性锐；unsharp 补一点边缘（放大后不明显）
       .outputOptions([
-        '-vf', `scale=${to.w}:${to.h}:flags=lanczos,unsharp=5:5:0.5:5:5:0`,
+        // 锐化幅度 0.5 → 0.8：lanczos 放大后原本偏软，0.5 几乎看不出来；
+        // 0.8 是「看得出来但不炸」的档（色度通道保持 0 锐化，避免彩色镶边）。
+        '-vf', `scale=${to.w}:${to.h}:flags=lanczos,unsharp=5:5:0.8:5:5:0`,
         '-c:v', 'libx264',
         '-crf', '18',
         '-preset', 'medium',

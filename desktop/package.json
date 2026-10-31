@@ -1,7 +1,7 @@
 {
   "name": "huobao-drama-desktop",
   "productName": "HuobaoDrama",
-  "version": "4.0.275",
+  "version": "4.0.404",
   "private": true,
   "description": "火宝短剧桌面版（Electron 壳）",
   "author": "Huobao",
@@ -12,7 +12,7 @@
     "rebuild:native": "electron-builder install-app-deps",
     "postinstall": "electron-builder install-app-deps",
     "dev": "npm run build:backend && npm run build:main && electron .",
-    "dist": "npm run build:backend && npm run build:main && node scripts/prepare-resources.mjs && electron-builder --mac",
+    "dist": "npm --prefix ../frontend run generate && npm run build:backend && npm run build:main && node scripts/prepare-resources.mjs && electron-builder --mac",
     "dist:win": "npm run build:backend && npm run build:main && node scripts/prepare-resources.mjs && electron-builder --win",
     "feed": "node scripts/make-update-feed.mjs",
     "publish": "node scripts/publish-release.mjs"

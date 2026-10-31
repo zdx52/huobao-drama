@@ -32,7 +32,7 @@ const ffprobePath = process.env.FFPROBE_BIN || resolveStatic('ffprobe-static')
 if (ffmpegPath) ffmpeg.setFfmpegPath(ffmpegPath)
 if (ffprobePath) ffmpeg.setFfprobePath(ffprobePath)
 
-export { ffmpeg }
+export { ffmpeg, ffmpegPath, ffprobePath }
 
 /** spawn 一次 -version 验证二进制真实可执行（含同步 EFTYPE 兜底） */
 function probeBinary(binPath: string | null): Promise<boolean> {

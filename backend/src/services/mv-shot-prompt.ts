@@ -327,12 +327,9 @@ export async function generateMvShotPrompt(inp: MvShotInput, ask: MvAsk): Promis
     ? `\n【本段修正意见（覆盖上文与之冲突的描写，改到对应那拍里去，不要追加新句）】${String(inp.extra).replace(/\s+$/, '')}`
     : ''
   const zh = [inp.roster, ...zhLines].filter(Boolean).join('\n') + extraBlock
-  // 参考板是四格（短剧同款）：按本段景别只点一格 —— 近景/特写点脸部特写格，其余点正面全身格；
-// 三格无头，所以必须同时声明"有完整头部与脸"，否则模型照无头参考板画。
-  const closeUpShot = /近景|特写/.test(String(inp.beats?.[0]?.size || ''))
-  const panelRule = closeUpShot
-    ? '`with her face and complete head taken from the face close-up panel (leftmost)` '
-    : '`with her body following the front full-body panel (second from left) and a complete head and face` '
+  // 参考板是三格三视图（正面全身 / 左侧面 / 背面），每格都是完整人物、脸也在里面 ——
+  // 一律点正面全身格，脸和体型都从那一格取（没有独立脸格可点了）。
+  const panelRule = '`with her body and face both taken from the front full-body panel (leftmost) and a complete head from the same panel` '
 
   inp.onProgress?.(2, TOTAL, '中文工作版（本地拼稿，不占模型时间）')
 
@@ -352,7 +349,7 @@ export async function generateMvShotPrompt(inp: MvShotInput, ask: MvAsk): Promis
     `per section: ${MV_SEGS.map((s) => `${s} ≈${MV_QUOTA[s]}`).join(' / ')}; hard cap ${MV_LIMIT}.\n` +
     `🔴 subject_definitions: one line per subject — \`<Subject N> is the <type> in <Picture N>, with <appearance + outfit colours>\`; ` +
     `take appearance from the asset text above, always name an explicit colour word (black / off-white / navy — not 'dark'); ` +
-    `🔴 the character card is a FOUR-PANEL sheet (left→right: face close-up / front full-body / 90° left side / back) and the three body panels carry NO head. ` +
+    `🔴 the character card is a THREE-PANEL sheet (left→right: front full-body / 90° left side / back); every panel shows the complete person head to feet with her face visible. ` +
     `Name **exactly one** panel and always declare a complete head: ${panelRule}. Never point at two panels at once, never invent other panels.\n` +
     `🔴 THIS IS A MUSIC-VIDEO SHOT: the song excerpt is supplied as \`<Audio 1>\` and reused 1:1. **Never write lyrics, <d> blocks or invented speech.** ` +
     `The spec has no dialogue rules for MV — the song is the only audio source. Required verbatim:\n` +
@@ -408,7 +405,7 @@ export async function generateMvShotPrompt(inp: MvShotInput, ask: MvAsk): Promis
   if (sdText) {
     let cleaned = String(sdText)
     if (!/close-up panel|full-body panel/i.test(cleaned)) {
-      cleaned = `${cleaned.replace(/\s+$/, '')} ${closeUpShot ? 'Her face and complete head are taken from the face close-up panel.' : 'Her body follows the front full-body panel and she has a complete head and face.'}`
+      cleaned = `${cleaned.replace(/\s+$/, '')} Her body and face both come from the front full-body panel and she has a complete head.`
     }
     parts.set('subject_definitions', cleaned)
   }

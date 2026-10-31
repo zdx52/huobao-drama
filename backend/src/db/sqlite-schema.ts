@@ -434,6 +434,8 @@ export const sqliteSchemaStatements = [
   `ALTER TABLE mv_assets ADD COLUMN series_id INTEGER`,
   `ALTER TABLE mv_assets ADD COLUMN scope TEXT DEFAULT 'project'`,
   `ALTER TABLE mv_assets ADD COLUMN source_asset_id INTEGER`,
+  `ALTER TABLE mv_assets ADD COLUMN variant_of INTEGER`,
+  `ALTER TABLE mv_assets ADD COLUMN costume_label TEXT`,
   `ALTER TABLE mv_shots ADD COLUMN ref_ids TEXT`,
   `ALTER TABLE mv_shots ADD COLUMN prompt_extra TEXT`,
   `ALTER TABLE mv_shots ADD COLUMN prompt_en TEXT`,

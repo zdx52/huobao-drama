@@ -355,6 +355,8 @@ export const mvAssets = sqliteTable('mv_assets', {
   seriesId: integer('series_id'),               // 资产库归属的 MV 项目（= 短剧角色的 drama_id）；同一项目下的歌共用
   scope: text('scope').default('project'),      // project = 本项目专用；library = 公共素材库（所有 MV 可见/可引用，2026-10-19）
   sourceAssetId: integer('source_asset_id'),    // 从素材库引用进本项目时记下来源 id（图共用，不复制文件）
+  variantOf: integer('variant_of'),             // 换装造型变体：指回基准资产 id（null = 基准本身）；照短剧 characters.variant_of
+  costumeLabel: text('costume_label'),          // 造型名（「正装」「晚礼服」），仅变体行有值
   id: integer('id').primaryKey({ autoIncrement: true }),
   projectId: integer('project_id').notNull(),
   kind: text('kind').notNull(),          // character | scene

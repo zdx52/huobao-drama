@@ -57,6 +57,12 @@
             <span class="field-hint" v-if="pj.danceSource">
               源片 {{ pj.danceFrames || 0 }} 帧 · {{ ((pj.danceFrames || 0) / 24).toFixed(1) }}s · {{ shots.length }} 段
             </span>
+            <input v-model.number="maxSeconds" class="input mv-num" type="number" min="5" max="15" step="0.5"
+              title="最长分镜（秒，H3 上限 15）—— 切成几段由它决定" />
+            <button class="btn btn-sm" @click="splitDance" :disabled="busy || !pj.danceFrames"
+              :title="pj.danceFrames ? `按「最长 ${maxSeconds} 秒」重切参考视频（会重建全部段）` : '先上传参考视频'">
+              {{ shots.length ? '重新切分' : '切分分镜' }}
+            </button>
             <button class="btn btn-sm" @click="compileDancePrompts" :disabled="busy || !shots.length"
               title="用项目里的人物/场景提示词，把每段的英文六段稿编译出来（动作来源写死 <Video 1>）">
               编译舞蹈提示词
@@ -165,7 +171,8 @@
           <label class="mv-label">歌词（一行一句；既用来把切点落在句界上，也是成片字幕的原文）</label>
           <textarea v-model="lyrics" class="input textarea" rows="5" placeholder="一行一句，可留空"></textarea>
         </template>
-        <div class="mv-row mv-credits-row">
+        <!-- 主创三行 + 自动对轴只对歌曲 MV 有意义：舞蹈项目没有歌词/对轴/片头主创字幕 -->
+        <div v-if="!isDance" class="mv-row mv-credits-row">
           <span class="mv-label">主创</span>
           <input v-model="songTitle" class="input mv-credit" placeholder="曲名" @change="saveCredits" />
           <input v-model="lyricist" class="input mv-credit" placeholder="作词" @change="saveCredits" />
@@ -231,8 +238,11 @@
         <div v-if="!assets.length" class="mv-hint">还没有资产 —— 点上面的「提取人物和场景」（每首歌各自一套，不会带上一首的）。</div>
 
         <!-- 人物（照短剧素材库：横排卡，图区固定 16:9） -->
+        <div class="mv-group-head">
+          <span class="mv-group-name">人物</span><span class="tag">{{ characters.length }}</span>
+          <button class="btn btn-sm" @click.stop="openLibrary('character')" title="从公共素材库挑一个已有人物，直接挂到这首歌（不用重新出图/生卡）">选择已有人物</button>
+        </div>
         <template v-if="characters.length">
-          <div class="mv-group-head"><span class="mv-group-name">人物</span><span class="tag">{{ characters.length }}</span></div>
           <div class="mv-char-grid">
             <article v-for="a in characters" :key="'c' + a.id" class="card mv-char-card" tabindex="0" role="button"
               @click="openEdit(a)" @keydown.enter.prevent="openEdit(a)">
@@ -262,6 +272,8 @@
                       {{ a.imageStatus === 'processing' ? '出图中…' : (a.image ? '重绘' : '出图') }}
                     </button>
                     <button class="btn btn-sm" @click.stop="makeCard(a)" :disabled="!a.image || cardBusy.includes(a.id)">{{ cardBusy.includes(a.id) ? '排队中…' : '生卡' }}</button>
+                    <button class="btn btn-sm" @click.stop="openCostume(a)" :disabled="!a.image" title="换一套衣服生成造型变体：脸不动，只换服装（图像编辑，约 50 秒）">换装</button>
+                    <button class="btn btn-sm" @click.stop="shareAsset(a)" :disabled="!a.image || a.scope === 'library'" :title="a.scope === 'library' ? '已在公共素材库里' : '存到公共素材库，其他歌的「选择已有人物/场景」就能直接用'">{{ a.scope === 'library' ? '已在素材库' : '存到素材库' }}</button>
                     <span v-if="a.card" class="tag tag-success">卡已生成</span>
                   </div>
                 </div>
@@ -275,8 +287,11 @@
         </template>
 
         <!-- 场景（照短剧素材库：竖排卡，封面跟随项目画幅） -->
+        <div class="mv-group-head">
+          <span class="mv-group-name">场景</span><span class="tag">{{ scenes.length }}</span>
+          <button class="btn btn-sm" @click.stop="openLibrary('scene')" title="从公共素材库挑一个已有场景，直接挂到这首歌（不用重新出图/生卡）">选择已有场景</button>
+        </div>
         <template v-if="scenes.length">
-          <div class="mv-group-head"><span class="mv-group-name">场景</span><span class="tag">{{ scenes.length }}</span></div>
           <div class="mv-scene-grid">
             <article v-for="a in scenes" :key="'s' + a.id" class="card mv-scene-card" tabindex="0" role="button"
               @click="openEdit(a)" @keydown.enter.prevent="openEdit(a)">
@@ -302,6 +317,7 @@
                     {{ a.imageStatus === 'processing' ? '出图中…' : (a.image ? '重绘' : '出图') }}
                   </button>
                   <button class="btn btn-sm" @click.stop="makeCard(a)" :disabled="!a.image || cardBusy.includes(a.id)">{{ cardBusy.includes(a.id) ? '排队中…' : '生卡' }}</button>
+                    <button class="btn btn-sm" @click.stop="shareAsset(a)" :disabled="!a.image || a.scope === 'library'" :title="a.scope === 'library' ? '已在公共素材库里' : '存到公共素材库，其他歌的「选择已有人物/场景」就能直接用'">{{ a.scope === 'library' ? '已在素材库' : '存到素材库' }}</button>
                   <span v-if="a.card" class="tag tag-success">卡已生成</span>
                 </div>
                 <div class="mv-final" :class="{ dim: !a.prompt }" :title="a.prompt || ''">
@@ -375,6 +391,10 @@
             </div>
             <div class="merge-card-meta">
               <span class="mono">{{ mergeTitle(m) }}</span>
+              <button v-if="isDance" class="btn btn-sm" :class="{ 'is-on': isFaced(m) }"
+                :disabled="busy || faceBusy === m.id"
+                :title="isFaced(m) ? '这条已修过脸（点可重修；覆盖本条，原片留 .before-face.mp4 备份）' : '对整条成片统一修一次脸（约 3 分钟；覆盖这条成片，原片留 .before-face.mp4 备份）'"
+                @click.stop="danceFace(m)">{{ faceBusy === m.id ? '修脸中…' : (isFaced(m) ? '已修脸 ✓' : '修脸') }}</button>
               <button class="btn btn-sm" :disabled="busy || isUpscaled(m)" :title="isUpscaled(m) ? '这条已经是 1080p' : '等比例放大到 1080p（保持原始画幅比例）'"
                 @click.stop="upscaleMerge(m)">{{ isUpscaled(m) ? '已 1080p' : '超分 1080p' }}</button>
               <a :href="staticUrl(m.mergedUrl)" download class="btn btn-sm" @click.stop>下载</a>
@@ -451,7 +471,7 @@
                 </div>
                 <div v-if="s.errorMsg" class="video-task-error" :title="s.errorMsg">{{ s.errorMsg.slice(0, 100) }}</div>
               </div>
-              <button v-if="s.status === 'processing'" class="btn btn-icon btn-sm video-task-action is-stop" title="停止这一段（排队中/生成中都可以停）" @click.stop="stopShot(s)">
+              <button v-if="s.status === 'processing' || s.status === 'failed'" class="btn btn-icon btn-sm video-task-action is-stop" :title="s.status === 'failed' ? '清除失败标记（重置成待生成，可重新点生成）' : '停止这一段（排队中/生成中都可以停）'" @click.stop="stopShot(s)">
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><rect x="5" y="5" width="14" height="14" rx="2"/></svg>
               </button>
               <button v-else class="btn btn-icon btn-sm video-task-action" :title="s.videoUrl ? '重绘' : '生成'" :disabled="shotPromptBusy === s.id" @click.stop="render(s)">
@@ -667,8 +687,8 @@
               </div>
               <div v-if="r.errorMsg" class="video-task-error" :title="r.errorMsg">{{ r.errorMsg.slice(0, 90) }}</div>
             </div>
-            <button v-if="r.state === 'pending'" class="btn btn-icon btn-sm video-task-action is-stop"
-              title="停止这一段（排队中也能停）" @click.stop="stopShot(r)">
+            <button v-if="r.state === 'pending' || r.state === 'failed'" class="btn btn-icon btn-sm video-task-action is-stop"
+              :title="r.state === 'failed' ? '清除失败标记（重置成待生成）' : '停止这一段（排队中也能停）'" @click.stop="stopShot(r)">
               <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><rect x="5" y="5" width="14" height="14" rx="2"/></svg>
             </button>
           </div>
@@ -740,6 +760,38 @@
 
     <!-- 编辑资产（与短剧素材详情弹窗同款：顶部标题栏 + 左侧预览 + 右侧编辑 + 底部最终提示词 + 操作栏） -->
     <Teleport to="body">
+      <!-- 换装造型：只换衣服、脸不动（图像编辑）；生成的是独立资产行，基准角色一个字不动 -->
+      <div v-if="costumeDlg" class="mv-modal mv-detail-overlay" @click.self="closeCostume">
+        <section class="card mv-detail-dialog" style="max-width:520px">
+          <header class="mv-detail-head">
+            <div class="mv-detail-title-block">
+              <span class="mv-detail-kicker">换装造型</span>
+              <h2 class="mv-detail-title">{{ costumeDlg.asset.name }}</h2>
+            </div>
+            <button class="btn btn-ghost btn-sm" :disabled="costumeDlg.busy" @click="closeCostume">关闭</button>
+          </header>
+          <div class="mv-detail-body" style="padding:16px">
+            <p class="field-hint" style="margin:0 0 12px">生成后是一个<strong>独立造型</strong>（名字为「{{ costumeDlg.asset.name }}·造型名」），原角色一个字不改。脸由图像编辑锁死，只换服装。</p>
+            <label class="mv-detail-edit-field">
+              <span>造型名</span>
+              <input v-model="costumeDlg.label" class="input" placeholder="正装 / 晚礼服 / 工装 / 运动装" :disabled="costumeDlg.busy" />
+            </label>
+            <label class="mv-detail-edit-field" style="margin-top:10px">
+              <span>造型描述（留空就用造型名）</span>
+              <textarea v-model="costumeDlg.desc" class="textarea mv-detail-textarea" rows="3"
+                placeholder="深藏青西装外套、白衬衫、酒红领带、黑色西裤、黑色皮鞋（每件都写颜色）" :disabled="costumeDlg.busy"></textarea>
+            </label>
+            <p v-if="costumeDlg.err" class="bad" style="margin:10px 0 0">{{ costumeDlg.err }}</p>
+            <div class="mv-row mv-row-end" style="margin-top:14px">
+              <button class="btn btn-sm" :disabled="costumeDlg.busy" @click="closeCostume">取消</button>
+              <button class="btn btn-primary btn-sm" :disabled="costumeDlg.busy || !costumeDlg.label.trim()" @click="runCostume">
+                {{ costumeDlg.busy ? '换装出图中（约 50 秒）…' : '生成造型' }}
+              </button>
+            </div>
+          </div>
+        </section>
+      </div>
+
       <div v-if="editAsset" class="mv-modal mv-detail-overlay" @click.self="editAsset = null">
         <section class="card mv-detail-dialog">
           <header class="mv-detail-head">
@@ -831,6 +883,30 @@
     </Teleport>
 
     <!-- 改名弹窗 -->
+    <!-- 从公共素材库挑已有人物/场景（2026-10-25） -->
+    <div v-if="libraryPick" class="mv-modal" @click.self="libraryPick = null">
+      <div class="card mv-modal-box">
+        <h3>选择已有{{ libraryPick === 'character' ? '人物' : '场景' }}</h3>
+        <p class="mv-hint" v-if="!libItems.length">公共素材库里还没有{{ libraryPick === 'character' ? '人物' : '场景' }}。先把某个项目的资产点「存到素材库」，这里就有了。</p>
+        <div class="mv-lib-grid">
+          <article v-for="a in libItems" :key="'lib' + a.id" class="card mv-lib-card" tabindex="0" role="button"
+            @click="pickLibrary(a)" @keydown.enter.prevent="pickLibrary(a)">
+            <div class="mv-lib-cover" :class="{ tall: libraryPick === 'scene' }">
+              <img v-if="a.image" :src="staticUrl(a.image)" :alt="a.name" />
+              <div v-else class="mv-cover-empty">未出图</div>
+            </div>
+            <div class="mv-asset-body">
+              <strong class="mv-name">{{ a.name || '未命名' }}</strong>
+              <div class="mv-summary">{{ a.description || a.appearance || '' }}</div>
+              <span class="tag" :class="{ 'tag-success': a.card }">{{ a.card ? '卡已生成' : '无卡' }}</span>
+            </div>
+          </article>
+        </div>
+        <div class="mv-modal-actions">
+          <button class="btn btn-sm" @click="libraryPick = null">取消</button>
+        </div>
+      </div>
+    </div>
     <div v-if="showRename" class="mv-modal" @click.self="showRename = false">
       <div class="card mv-modal-box mv-modal-sm">
         <h3>改名称</h3>
@@ -1129,7 +1205,12 @@ async function assemble() {
   const picked = exportSelected.value
   if (!need(picked.length, '先在「合成导出」页勾选要拼接的镜头')) return
   const r = await call(() => api.post(`/mv/projects/${pj.value.id}/assemble`, { shot_ids: picked }), '正在拼接并混入原曲…')
-  if (r) { await refresh(); exportSelected.value = shots.value.filter((x) => x.videoUrl).map((x) => x.id) }
+  if (r) {
+    await refresh()
+    exportSelected.value = shots.value.filter((x) => x.videoUrl).map((x) => x.id)
+    // 少段要当场说：原来静默按勾选拼，用户以为全部段都进去了（实测成片 474 帧 = 3 段，少 6.4 秒）
+    if (r?.warning) alert(String(r.warning))
+  }
 }
 const askAssemble = () => askConfirm('开始拼接',
   `会把勾选的 ${exportSelected.value.length} 段按顺序拼接、并混入原曲（从头对齐）。继续？`, '开始拼接', assemble)
@@ -1199,8 +1280,13 @@ const askGenPrompts = () => {
     const list = picked.length ? picked : shots.value
     if (!list.length) return
     return askConfirm('全部重写提示词',
-      `会把 ${list.length} 段的提示词按当前的人物/场景/分镜**全部重跑一遍**（会覆盖已有内容，每段约 1~2 分钟）。继续？`, '开始重写',
+      isDance.value
+        ? `会把 ${list.length} 段的舞蹈提示词按当前人物/场景**重新编译一遍**（这几份描述只重新翻译一次，所有段共用同一份，保证跨段一致）。继续？`
+        : `会把 ${list.length} 段的提示词按当前的人物/场景/分镜**全部重跑一遍**（会覆盖已有内容，每段约 1~2 分钟）。继续？`, '开始重写',
       async () => {
+        // 舞蹈项目：走模板编译接口（三份描述只翻一次、全段共用）——
+        // 逐段打 /shots/:id/prompt 会让每段各翻一遍，人物/服装措辞不一致 → 跨段漂移。
+        if (isDance.value) { await compileDancePrompts(); selectedIds.value = []; return }
         await runBatchPrompts(list)
         selectedIds.value = []
       })
@@ -1617,9 +1703,12 @@ async function doUploadDance(f) {
     const r = await api.post(`/mv/projects/${pj.value.id}/dance`, {
       video: { name: f.name || 'dance.mp4', data: await readFileAsDataUrl(f) },
     })
+    const segN = (r?.shots || []).length
+    const drop = Number(r?.dropped || 0)
     promptResult.value = {
       ok: true,
-      text: `✓ 适配完成 · ${r?.frames || 0} 帧 / ${(Number(r?.seconds || 0)).toFixed(1)}s · 切成 ${(r?.shots || []).length} 段`,
+      text: `✓ 适配完成 · ${r?.frames || 0} 帧 / ${(Number(r?.seconds || 0)).toFixed(1)}s · 按最长 ${maxSeconds.value} 秒切成 ${segN} 段`
+        + (drop ? `（末尾 ${drop} 帧 ≈ ${(drop / 24).toFixed(1)}s 凑不够帧网格没用上；想少丢就把「最长分镜」调大）` : ''),
     }
     await refresh()
   } catch (err) {
@@ -1630,11 +1719,33 @@ async function doUploadDance(f) {
   }
 }
 
+function splitDance() {
+  const n = shots.value.length
+  askConfirm(n ? '重新切分舞蹈分镜' : '切分舞蹈分镜',
+    n
+      ? `按「最长 ${maxSeconds.value} 秒」重切，重建全部 ${n} 段：现有的分镜内容、提示词、生成记录都会被清掉（已生成的视频文件还在磁盘上，但不再挂在这些分镜上）。继续？`
+      : `按「最长 ${maxSeconds.value} 秒」把参考视频切成几段（每段吸附 17n+5 帧网格）。继续？`,
+    n ? '重新切分' : '开始切分',
+    async () => {
+      const r = await call(() => api.post(`/mv/projects/${pj.value.id}/dance-split`, { max_seconds: maxSeconds.value }), '正在按参考视频切段…')
+      if (r) {
+        const drop = Number(r.dropped || 0)
+        promptResult.value = {
+          ok: true,
+          text: `✓ 切成 ${(r.shots || []).length} 段 · 每段最长 ${r.max_seconds} 秒`
+            + (drop ? `（末尾 ${drop} 帧 ≈ ${(drop / 24).toFixed(1)}s 没用上；想少丢就把「最长分镜」调大）` : ''),
+        }
+        await refresh()
+      }
+    })
+}
+
 async function compileDancePrompts() {
   busy.value = true
   stepMsg.value = '按人物/场景编译舞蹈提示词…'
   try {
-    const r = await api.post(`/mv/projects/${pj.value.id}/dance-prompts`, {})
+    // 每次点都真调模型翻译（不去吃上一轮的缓存）——用户 2026-10-24：点了就得执行
+    const r = await api.post(`/mv/projects/${pj.value.id}/dance-prompts`, { regenerate: true })
     promptResult.value = { ok: true, text: `✓ 已编译 ${r?.count || 0} 段提示词（逐段可编辑）` }
     await refresh()
   } catch (err) {
@@ -1682,15 +1793,85 @@ function isUpscaled(m) {
   return marked || /mv_1080_/.test(String(m?.mergedUrl || ''))
 }
 
+/** 换装造型（照短剧换装：独立造型行，脸由图像编辑锁死，只换服装） */
+const costumeDlg = ref(null)
+function openCostume(a) {
+  if (!a?.image) return
+  costumeDlg.value = { asset: a, label: '', desc: '', busy: false, err: '' }
+}
+function closeCostume() {
+  if (costumeDlg.value?.busy) return
+  costumeDlg.value = null
+}
+async function runCostume() {
+  const d = costumeDlg.value
+  if (!d || d.busy) return
+  const label = String(d.label || '').trim()
+  if (!label) return
+  d.busy = true
+  d.err = ''
+  try {
+    await call(() => api.post(`/mv/projects/${pj.value.id}/assets/${d.asset.id}/costume-variant`, {
+      costume_label: label,
+      costume_desc: String(d.desc || '').trim(),
+    }), '正在换装出图（图像编辑，约 50 秒）…')
+    await refresh()
+    costumeDlg.value = null
+  } catch (e) {
+    d.err = '换装失败：' + String(e?.message || e)
+  } finally {
+    if (costumeDlg.value) costumeDlg.value.busy = false
+  }
+}
+
+/** 这条成片修过脸没（后端修脸成功打 face 标记） */
+function isFaced(m) {
+  try { return JSON.parse(m?.shotIds || '[]').includes('face') } catch { return false }
+}
+
+/** 对成片统一修脸（舞蹈项目）：生成阶段不修脸，拼接完再对整片修一次，两段脸才一致 */
+const faceBusy = ref(null)
+const danceFace = (m) => askConfirm('对成片修脸',
+  '会对这条成片整片修一次脸（约 3 分钟）。会覆盖这条成片，原片留 .before-face.mp4 备份。继续？', '开始修脸',
+  async () => {
+    faceBusy.value = m.id
+    try {
+      const r = await call(() => api.post(`/mv/projects/${pj.value.id}/merges/${m.id}/dance-face`, {}), '正在修脸（约 3 分钟）…')
+      const cur = mergeList.value.find((x) => x.id === m.id)
+      if (cur) {
+        let tags = []
+        try { tags = JSON.parse(cur.shotIds || '[]') } catch { tags = [] }
+        if (!Array.isArray(tags)) tags = []
+        if (!tags.includes('face')) tags.push('face')
+        cur.shotIds = JSON.stringify(tags)
+      }
+      await enterExport()
+      if (r && r.merged_url) exportPreview.value = { url: r.merged_url, title: '成片（修脸后）' }
+    } catch (e) {
+      alert('修脸失败：' + String(e?.message || e))
+    } finally {
+      faceBusy.value = null
+    }
+  })
+
 /** 超分到 1080p（等比例放大：原始什么比例就用什么比例），落成新的一条成片记录 */
 async function upscaleMerge(m) {
-  const r = await call(() => api.post(`/mv/projects/${pj.value.id}/upscale`, { url: m.mergedUrl }), '正在等比例超分到 1080p…')
-  if (r?.output_url) {
-    await refresh()
-    exportPreview.value = { url: r.output_url, title: '1080p 成片' }
-    stepMsg.value = `已超分到 ${r.width || ''}×${r.height || ''}`
-    setTimeout(() => { if (stepMsg.value.startsWith('已超分到')) stepMsg.value = '' }, 2000)
+  const doUpscale = async () => {
+    const r = await call(() => api.post(`/mv/projects/${pj.value.id}/upscale`, { url: m.mergedUrl }), '正在等比例超分到 1080p…')
+    if (r?.output_url) {
+      await refresh()
+      exportPreview.value = { url: r.output_url, title: '1080p 成片' }
+      stepMsg.value = `已超分到 ${r.width || ''}×${r.height || ''}`
+      setTimeout(() => { if (stepMsg.value.startsWith('已超分到')) stepMsg.value = '' }, 2000)
+    }
   }
+  // 顺序提醒：超分是 lanczos 纯插值，不生成新细节 —— 先超分再修脸，等于让模型在
+  // 插值出来的假细节上重画，脸反而更糊。修脸必须在原生 768×1344 上先做完。只提示不拦。
+  if (isDance.value && !isFaced(m)) {
+    return askConfirm('建议先修脸再超分',
+      '这条成片还没修过脸。超分只是插值放大，不会补出脸部细节 —— 先修脸再超分，脸最清楚；先超分再修脸，模型要在插值画面里重画，效果更差。\n\n仍然直接超分吗？', '直接超分', doUpscale)
+  }
+  return doUpscale()
 }
 
 async function saveCredits() {
@@ -1822,6 +2003,31 @@ async function extract() {
 function keepExtracted(c) {
   dupConflicts.value = dupConflicts.value.filter((x) => x.assetId !== c.assetId)
 }
+// 从公共素材库挑已有人物/场景（2026-10-25）—— 主动选，不依赖「提取到同名」那条被动路径
+const libraryPick = ref(null)
+const libItems = computed(() => {
+  const all = (current.value && current.value.libraryAssets) || []
+  return all.filter((a) => a.kind === libraryPick.value)
+})
+function openLibrary(kind) {
+  // 库为空也照样打开：弹窗里有「还没有」的提示文案，比点了没反应好
+  libraryPick.value = kind
+}
+async function shareAsset(a) {
+  const r = await call(() => api.post(`/mv/projects/${pj.value.id}/assets/${a.id}/share`), '正在存到公共素材库…')
+  if (r) { assets.value = assets.value.map((x) => (x.id === a.id ? { ...x, scope: 'library' } : x)); await refresh() }
+}
+
+async function pickLibrary(a) {
+  const r = await call(() => api.post(`/mv/projects/${pj.value.id}/assets/from-library`, { libraryId: a.id }),
+    '正在挂上已有资产…')
+  if (r) {
+    assets.value = r.assets || assets.value
+    libraryPick.value = null
+    await refresh()
+  }
+}
+
 async function useLibrary(c) {
   const r = await call(() => api.post(`/mv/projects/${pj.value.id}/assets/${c.assetId}/use-library`, { libraryId: c.libraryId }),
     '正在套用素材库里的形象…')
@@ -1834,10 +2040,11 @@ async function useLibrary(c) {
 // 删人物/场景卡之前先弹窗确认（误点一次就没了）
 function askRemoveAsset(a) {
   const kind = a.kind === 'character' ? '人物' : '场景'
-  // 素材库(scope='library')的条目只从这首 MV 取消卡片，库里的原图和描述不动
-  if (a.scope === 'library') {
+  // 素材库(scope='library')的条目、以及从素材库挑进来的卡（sourceAssetId）都只是取消这首 MV 的卡片：
+  // 库里的原图/描述/身份卡一律不动（2026-10-28：用户明确「删除按钮只删这里的」）
+  if (a.scope === 'library' || a.sourceAssetId) {
     askConfirm(`从这首 MV 移除${kind}卡`,
-      `「${a.name || '未命名'}」是素材库里的资产：这里只会把它从这首 MV 的资产制作里移除，素材库中的原图和描述**保留**，其他 MV 照常能用。`,
+      `「${a.name || '未命名'}」来自素材库：这里只会把它从这首 MV 的资产制作里移除，素材库中的原图、描述和身份卡**保留**，其他 MV 照常能用。`,
       '从本项目移除', () => removeAsset(a))
     return
   }
@@ -1847,7 +2054,7 @@ function askRemoveAsset(a) {
 }
 
 async function removeAsset(a) {
-  const r = await call(() => api.delete(`/mv/projects/${pj.value.id}/assets/${a.id}`), '正在删除…')
+  const r = await call(() => api.del(`/mv/projects/${pj.value.id}/assets/${a.id}`), '正在删除…')
   if (r) assets.value = r.assets || []
   if (editAsset.value && editAsset.value.id === a.id) editAsset.value = null
 }
@@ -1937,6 +2144,8 @@ async function render(s) {
 /** 停止某一段：排队中的直接作废，正在跑的也会在下一轮轮询收尾（不删已生成的成片） */
 async function stopShot(s) {
   if (!s) return
+  // 失败状态只是清标记（后端 cancel 会把这一段重置成 pending、清掉 errorMsg），不用二次确认
+  if (s.status === 'failed' || s.state === 'failed') return doStopShot(s)
   // 已经在 GPU 上跑的那条停不掉（服务器会跑完），只有还在排队的能真作废 —— 先把代价说清楚再动手
   const running = !!taskRows.value.find((r) => r.id === s.id)?.running   // 排队中(false) 还是已在 GPU 上出片(true)
   askConfirm('停止生成',
@@ -1949,7 +2158,9 @@ async function doStopShot(s) {
   const r = await call(() => api.post(`/mv/projects/${pj.value.id}/shots/${s.id}/cancel`, {}), '正在停止…')
   if (r) {
     await refresh()
-    promptResult.value = { ok: true, text: `■ 第 ${s.shotNumber} 段已停止${Number(r.canceled_tasks) ? `（作废 ${Number(r.canceled_tasks)} 个排队任务）` : ''}` }
+    promptResult.value = { ok: true, text: s.status === 'failed'
+      ? `■ 第 ${s.shotNumber} 段的失败标记已清除（可以重新点生成）`
+      : `■ 第 ${s.shotNumber} 段已停止${Number(r.canceled_tasks) ? `（作废 ${Number(r.canceled_tasks)} 个排队任务）` : ''}` }
   }
 }
 
@@ -2426,6 +2637,12 @@ onUnmounted(() => { if (timer) clearInterval(timer) })
 
 /* 弹窗 */
 .mv-modal { position: fixed; inset: 0; background: rgba(0,0,0,0.35); display: flex; align-items: center; justify-content: center; z-index: 50; }
+.mv-lib-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; max-height: 52vh; overflow: auto; margin: 12px 0; }
+.mv-lib-card { cursor: pointer; padding: 8px; display: flex; flex-direction: column; gap: 6px; }
+.mv-lib-card:hover { border-color: var(--accent, #888); }
+.mv-lib-cover { aspect-ratio: 16 / 9; border-radius: 6px; overflow: hidden; background: rgba(127,127,127,.12); display: flex; align-items: center; justify-content: center; }
+.mv-lib-cover.tall { aspect-ratio: 3 / 4; }
+.mv-lib-cover img { width: 100%; height: 100%; object-fit: cover; }
 .mv-modal-box { padding: 18px 20px; width: 560px; max-height: 88vh; overflow: auto; }
 .mv-modal-sm { width: 420px; }
 .mv-modal-box h3 { margin: 0 0 12px; font-size: 15px; }

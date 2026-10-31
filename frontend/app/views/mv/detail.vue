@@ -404,9 +404,10 @@
               <textarea v-model="form.storyPrompt" class="textarea" rows="4"
                 placeholder="例：开场雨夜的城市街道，主角撑伞独行；副歌切到房间里翻旧照片……"></textarea>
             </label>
-            <label v-if="form.kind !== 'dance'" class="field">
-              <span class="field-label">最长切分（秒，默认 10，最大 15）</span>
+            <label class="field">
+              <span class="field-label">{{ form.kind === 'dance' ? '最长分镜（秒，默认 10，最大 15）' : '最长切分（秒，默认 10，最大 15）' }}</span>
               <input v-model.number="form.maxShotSeconds" class="input" type="number" min="5" max="15" step="0.5" style="width:110px" />
+              <span v-if="form.kind === 'dance'" class="field-hint">参考视频按这个时长切成几段（每段吸附 17n+5 帧网格，最短 5.2 秒）</span>
             </label>
           </div>
           <div class="dialog-foot">
@@ -589,6 +590,7 @@ async function createSong() {
         style: form.style,
         aspect_ratio: form.aspectRatio,
         kind: 'dance',
+        max_shot_seconds: form.maxShotSeconds,
       })
       if (!r?.id) throw new Error('建项目没返回 id')
       await api.post(`/mv/projects/${r.id}/dance`, {

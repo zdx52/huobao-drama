@@ -164,10 +164,13 @@ export class MiniMaxVideoAdapter implements VideoProviderAdapter {
       const t = task.timing && typeof task.timing === 'object' ? task.timing : null
       const genSeconds = Number(t?.gen_seconds)
       const queueSeconds = Number(t?.queue_seconds)
-      const timing = (Number.isFinite(genSeconds) || Number.isFinite(queueSeconds))
+      // 2026-10-28：舞蹈续拍段的真实生成帧数（中转带回），App 裁切算画面起点要用
+      const genFrames = Number((t as any)?.gen_frames)
+      const timing = (Number.isFinite(genSeconds) || Number.isFinite(queueSeconds) || Number.isFinite(genFrames))
         ? {
             genSeconds: Number.isFinite(genSeconds) ? genSeconds : undefined,
             queueSeconds: Number.isFinite(queueSeconds) ? queueSeconds : undefined,
+            ...(Number.isFinite(genFrames) && genFrames > 0 ? { genFrames } : {}),
           }
         : undefined
       return {

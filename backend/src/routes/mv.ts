@@ -21,9 +21,11 @@ import { Hono } from 'hono'
 import { extractVideoPoster } from '../utils/video-poster.js'
 import { eq, desc, and, or, isNull, inArray } from 'drizzle-orm'
 import fs from 'fs'
+import { execFile } from 'child_process'
 import path from 'path'
 import { db, schema, getInsertId } from '../db/index.js'
 import { generateImage, generateVideo, imageSizeForAspect } from '../services/generation.js'
+import { generateCostumeBoard, costumeEditPrompt } from '../services/costume-edit.js'
 import { getTextConfig, getTextProviderBaseUrl, getActiveConfig, getConfigById } from '../services/ai.js'
 import { getStyleSpecByValue } from '../services/style-preset.js'
 import { generateMvShotPrompt } from '../services/mv-shot-prompt.js'
@@ -32,9 +34,9 @@ import { loadAgentPromptFile } from '../agents/prompts.js'
 import { readSkillFile } from '../agents/skills.js'
 import { extractChatText } from '../services/asset-describe-prompt.js'
 import { getAbsolutePath } from '../utils/storage.js'
-import { STORAGE_ROOT } from '../utils/paths.js'
+import { STORAGE_ROOT, DATA_ROOT } from '../utils/paths.js'
 import { success, created, badRequest, notFound, serverError, now } from '../utils/response.js'
-import { logTaskError, logTaskStart, logTaskSuccess } from '../utils/task-logger'
+import { logTaskError, logTaskProgress, logTaskStart, logTaskSuccess } from '../utils/task-logger'
 import { buildAss, parseLrc } from '../services/mv-subtitles'
 import { upscaleVideo } from '../services/video-upscale.js'
 import os from 'os'
@@ -43,7 +45,7 @@ import os from 'os'
 function assFilterPath(p: string): string {
   return p.replace(/\\/g, '/').replace(/:/g, '\\:').replace(/'/g, "\\'").replace(/ /g, '\\ ')
 }
-import { ffmpeg } from '../utils/ffmpeg.js'
+import { ffmpeg, ffmpegPath, ffprobePath } from '../utils/ffmpeg.js'
 // 2026-10-19：MV 提示词完全走自己的链路（askText + 只读技能文本），**不引短剧的任何服务/Agent**
 
 // 服务器模板 mv_shot.api.json 节点14 的音频窗口 warmup_seconds（那边改了这里要同步）
@@ -91,6 +93,343 @@ async function trimToSegment(rel: string, shot: any, songRel: string): Promise<s
     logTaskError('MV', 'trim', { rel, error: err?.message })
     for (const f of [tmpV, tmpA, tmpO]) { try { fs.rmSync(f, { force: true }) } catch { /* 忽略 */ } }
     return rel
+  }
+  return rel
+}
+
+
+/** 舞蹈 MV 续段：中转返回的是 latent 拼接后的整片（如 396 帧），
+ *  这里只取最后 want 帧（= 本段内容），保留音轨。首段 got≈want 时直接返回。 */
+/** 用「上一段的尾部音频」在整片音频里反解本段起点（能量包络互相关，5ms 精度）。
+ *  返回本段在整片里的起始秒；解不出或相关太低返回 -1。
+ *  为什么必须实测：整片里前段占多少帧取决于中转的 CTX 预热和 17k+5 取整，
+ *  实测段2 占 170 帧、段3 占 182 帧 —— 同一个公式两种结果。猜错就是整段晚 0.5 秒（音乐错位）。*/
+async function danceSeamStart(wholeAbs: string, prevAbs: string, guessSec = -1): Promise<number> {
+  const SR = 32000, HOP = 160, TAIL = 0.4        // 5ms 一格，模板取上一段最后 0.4 秒
+  // 用 execFile 而不是 fluent 的 .pipe()：pipe 流在多段并发解码时会抛
+  // 'Output stream closed'（自检里直接崩进程，destroy 也压不住）。
+  const run = (args: string[]) => new Promise<Buffer>((res) => {
+    try {
+      execFile(ffmpegPath || 'ffmpeg', args, { maxBuffer: 512 * 1024 * 1024, encoding: 'buffer' as any },
+        (e: any, out: any) => res(!e && out ? (out as Buffer) : Buffer.alloc(0)))
+    } catch { res(Buffer.alloc(0)) }
+  })
+  const pcm = (f: string) => run(['-v', 'error', '-i', f, '-vn', '-ac', '1', '-ar', String(SR), '-f', 's16le', '-'])
+  const env = (b: Buffer) => {
+    const n = Math.floor(b.length / 2 / HOP), r = new Float32Array(Math.max(0, n))
+    for (let i = 0; i < n; i++) {
+      let s = 0
+      for (let j = 0; j < HOP; j++) { const k = (i * HOP + j) * 2; if (k + 1 < b.length) { const v = b.readInt16LE(k) / 32768; s += v * v } }
+      r[i] = Math.sqrt(s / HOP)
+    }
+    return r
+  }
+  const [w, p] = await Promise.all([pcm(wholeAbs), pcm(prevAbs)])
+  const we = env(w), pe = env(p)
+  const tn = Math.round(TAIL * SR / HOP)
+  if (pe.length < tn * 2 || we.length < tn * 3) return -1
+  const tpl = pe.subarray(pe.length - tn)
+  let tm = 0; for (const v of tpl) tm += v; tm /= tn
+  let tv = 0; for (const v of tpl) tv += (v - tm) ** 2
+  if (tv < 1e-9) return -1                       // 上一段尾巴是静音，没法定位
+  let best = -2, bestAt = -1
+  // 只在「公式值 ±1 秒」内搜：舞蹈音乐段落相似度高，全片搜会在别处找到假峰
+  // （实测负例：拿不相干的段3 当上一段，全片搜返回 8.37s 且相关度 > 0.5）。
+  const from = guessSec > 0 ? Math.max(0, Math.round((guessSec - 1) * SR / HOP)) : 0
+  const to = guessSec > 0 ? Math.min(we.length - tn, Math.round((guessSec + 1) * SR / HOP)) : we.length - tn
+  for (let i = from; i <= to; i++) {
+    let m = 0; for (let j = 0; j < tn; j++) m += we[i + j]; m /= tn
+    let num = 0, dv = 0
+    for (let j = 0; j < tn; j++) { const a = we[i + j] - m, b = tpl[j] - tm; num += a * b; dv += a * a }
+    if (dv < 1e-9) continue
+    const c = num / Math.sqrt(dv * tv)
+    if (c > best) { best = c; bestAt = i }
+  }
+  // 阈值 0.9：真匹配实测 0.9999（正例1/正例2 都是），不相干素材最高只有 0.69（负例），
+  // 中间没有过渡值。达不到就退回公式，宁可保守也不乱跳。
+  if (bestAt < 0 || best < 0.9) return -1
+  return (bestAt + tn) * HOP / SR                 // 模板尾 = 上一段结束 = 本段起点
+}
+
+/** 用「上一段尾部的画面运动量」在整片里反解本段的**画面**起点（逐帧精度）。
+ *  为什么不能用音频值：中转整片里音画本身就差 4 帧。实测 p11 段3 ——
+ *  段2 的画面结束在整片第 162 帧，音频结束在第 158 帧（两者相关度都是 1.000）。
+ *  只用音频反解（158）→ 画面多带前一段 4 帧 → 接缝处动作重放一拍（用户说的「多了一拍」）。
+ *  返回本段画面起点（秒）；解不出返回 -1。 */
+async function danceMotionSeam(wholeAbs: string, prevAbs: string, guessSec = -1): Promise<number> {
+  const W = 160, H = 288, FPS = 24
+  const motion = (f: string) => new Promise<Float32Array>((res) => {
+    execFile(ffmpegPath || 'ffmpeg',
+      ['-v', 'error', '-i', f, '-vf', `scale=${W}:${H},format=gray`, '-f', 'rawvideo', '-'],
+      { maxBuffer: 512 * 1024 * 1024, encoding: 'buffer' as any },
+      (e: any, out: any) => {
+        if (e || !out) return res(new Float32Array(0))
+        const a = out as Buffer, sz = W * H
+        const n = Math.floor(a.length / sz)
+        const m = new Float32Array(Math.max(0, n - 1))
+        for (let i = 1; i < n; i++) {
+          const cur = a.subarray(i * sz, (i + 1) * sz), prev = a.subarray((i - 1) * sz, i * sz)
+          let s = 0
+          for (let j = 0; j < sz; j++) s += Math.abs(cur[j] - prev[j])
+          m[i - 1] = s / sz
+        }
+        res(m)
+      })
+  })
+  const [mw, mp] = await Promise.all([motion(wholeAbs), motion(prevAbs)])
+  const TPL = 24                                    // 取上一段最后 1 秒的运动量当模板
+  if (mp.length < TPL * 2 || mw.length < TPL * 3) return -1
+  const tpl = mp.subarray(mp.length - TPL)
+  let tm = 0; for (const v of tpl) tm += v; tm /= TPL
+  let tv = 0; for (const v of tpl) tv += (v - tm) ** 2
+  if (tv < 1e-6) return -1                          // 上一段最后 1 秒几乎不动，没法定位
+  // 窗口 ±1.5 秒（±36 帧）：画面和音频只差几帧，但要对齐「差的那几帧」得留够余量；
+  // 实测 ±1 秒时正确点会落在窗口下界之外 1 帧（合成用例 i=47 vs 窗口 from=48 → 解不出）。
+  const from = guessSec > 0 ? Math.max(0, Math.round((guessSec - 1.5) * FPS)) : 0
+  const to = guessSec > 0 ? Math.min(mw.length - TPL, Math.round((guessSec + 1.5) * FPS)) : mw.length - TPL
+  let best = -2, bestAt = -1
+  for (let i = from; i <= to; i++) {
+    let m = 0; for (let j = 0; j < TPL; j++) m += mw[i + j]; m /= TPL
+    let num = 0, dv = 0
+    for (let j = 0; j < TPL; j++) { const a = mw[i + j] - m, b = tpl[j] - tm; num += a * b; dv += a * a }
+    if (dv < 1e-6) continue
+    const c = num / Math.sqrt(dv * tv)
+    if (c > best) { best = c; bestAt = i }
+  }
+  if (bestAt < 0 || best < 0.9) return -1
+  // 模板尾 = 上一段画面结束 = 本段画面起点
+  return (bestAt + TPL) / FPS
+}
+
+/** 数视频真帧数（-count_frames；mp4 的 nb_frames 会少报 5 帧，不能信） */
+function countVideoFrames(abs: string): Promise<number> {
+  return new Promise<number>((res) => {
+    execFile(ffprobePath || 'ffprobe', ['-v', 'error', '-select_streams', 'v:0', '-count_frames',
+      '-show_entries', 'stream=nb_read_frames', '-of', 'csv=p=0', abs], (e: any, out: any) => {
+      if (e) return res(0)
+      res(Number(String(out).trim()) || 0)
+    })
+  })
+}
+
+async function trimDanceSegmentTail(rel: string, shot: any, prevFrames: number, prevAbs?: string, genFrames = 0): Promise<string> {
+  if (!rel) return rel
+  const abs = getAbsolutePath(rel)
+  // 🔴 必须用 `-count_frames` 真数：mp4 的 nb_frames 实测会**少报**（本机少报 5 帧），
+  // 于是 skip=got-target 少裁 5 帧 → 段2 开头把段1 结尾的 5 帧原样重复一遍（用户看到"跳一下/卡一下"）。
+  // 🔴 2026-10-27：ffprobe 失败时原来直接 `return rel` —— 等于把中转整片（345 帧）当成本段交出去，
+  //    成片里塞进前面所有段、音轨整段错位。实测段3 就是这样（345 帧、无 .seg.wav、无日志）。
+  //    改成三级降级：execFile 失败 → fluent ffprobe（用的同一个 ffprobePath）→ 再失败按 target 帧数走。
+  const probeFrames = (f: string) => new Promise<number>((res) => {
+    execFile(ffprobePath || 'ffprobe', ['-v', 'error', '-select_streams', 'v:0', '-count_frames',
+      '-show_entries', 'stream=nb_read_frames', '-of', 'csv=p=0', f],
+      (e: any, out: any) => {
+        if (e) console.log('[trim-probe-err]', f, '|', String(e).slice(0, 300))
+        res(e ? 0 : Number(String(out).trim()) || 0)
+      })
+  })
+  let got = await probeFrames(abs)
+  if (!got) {
+    got = await new Promise<number>((res) => {
+      ffmpeg.ffprobe(abs, (e: any, m: any) => {
+        if (e) return res(0)
+        const st = (m?.streams || []).find((x: any) => x.codec_type === 'video')
+        res(Number(st?.nb_frames) || Math.round(Number(st?.duration) * 24) || 0)
+      })
+    })
+    if (got) console.log('[trim-probe-fallback] fluent ffprobe 数到', got, '帧:', path.basename(abs))
+  }
+  const targetHint = Math.max(2, Math.round(Number(shot.frames) || 0) || 0)
+  if (!got) {
+    if (!targetHint) return rel
+    // 数不出帧数但知道本段该多长：按 target 从末尾取，宁可少一点也别把整片交出去
+    got = targetHint + Math.max(0, prevFrames)
+    console.log('[trim-probe-missing]', path.basename(abs), '用 target+prevFrames 推算 got =', got)
+  }
+  // 🔴 首段（前面没有段）：视频不用裁，但要做两件事——
+  // ① 导一份 PCM 音轨（.seg.wav）给拼接用；
+  // ② 把 mp4 音轨统一转成 aac。中转可能给 alac（无损），而 Electron 的 <video> 解不了 ALAC
+  //    → 用户看到画面但完全没声音（实测 1319 段1 就是这样）。视频流 copy，不重编码，很快。
+  if (prevFrames <= 2) {
+    // 🔴 段2+ 拿不到上一段帧数 = 数据链断了，宁可失败报错也不交付没裁的整片。
+    //   2026-10-30 教训：这条判定原来没区分「第一段」—— 段1 天然 prevFrames=0，
+    //   于是段1 下载完就抛异常，任务记为 completed 但 mv_shots 卡在 processing
+    //   （用户看到的「段1 跑完了但界面不动」）。段1 必须走下面的原逻辑。
+    if (Number(shot?.shotNumber) > 1) {
+      throw new Error(
+        `段${Number(shot?.shotNumber) || 0} 裁切缺少上一段帧数（prevFrames=${prevFrames}，上一段 videoUrl 为空或读不出帧数）`
+        + ` —— 不交付未裁切的整片。先确认上一段已生成完成，再重跑本段。`)
+    }
+    // 首段（前面没有段）：视频不用裁，但要做两件事——
+    // ① 导一份 PCM 音轨（.seg.wav）给拼接用；
+    // ② 把 mp4 音轨统一转成 aac。中转可能给 alac（无损），而 Electron 的 <video> 解不了 ALAC
+    //    → 用户看到画面但完全没声音（实测 1319 段1 就是这样）。视频流 copy，不重编码，很快。
+    const wavOut = abs.replace(/\.mp4$/i, '.seg.wav')
+    // 中转落的是 PCM（mov 容器，音频比视频多 0.5s），本段需要的采样数源里直接有。
+    // 别再回退：aac 每 1024 采样一块，158 帧 = 210666.7 采样编不满 → 段音频短 747 个采样，接缝处 23ms 空洞；
+    // apad 补静音是洞，atempo 拉伸是改音乐。
+    const samples = Math.round((got / 24) * 32000)
+    try {
+      await new Promise<void>((resolve) => {
+        ffmpeg(abs).outputOptions(['-vn', '-t', (samples / 32000).toFixed(6),
+          '-c:a', 'pcm_s16le', '-ar', '32000', '-ac', '1', '-y'])
+          .on('end', () => resolve()).on('error', () => resolve()).save(wavOut)
+      })
+    } catch { /* 拼接会退回 mp4 音轨 */ }
+    try {
+      const tmpA = abs.replace(/\.mp4$/i, '.aac.mp4')
+      await new Promise<void>((resolve, reject) => {
+        ffmpeg(abs).outputOptions(['-map', '0:v', '-map', '0:a?', '-c:v', 'copy',
+          '-c:a', 'aac', '-b:a', '192k', '-shortest', '-movflags', '+faststart', '-y'])
+          .on('end', () => resolve()).on('error', (e: Error) => reject(e)).save(tmpA)
+      })
+      fs.renameSync(tmpA, abs)
+    } catch { /* 转码失败就保留原文件 */ }
+    return rel
+  }
+  // 取最后「本段目标帧数」帧：中转返回的整片 = 前面各段 + 本段（含提前起跑的前置帧），
+  // 前置帧数由中转的 CTX 决定（模板里的预热帧），不能拿 it 反推 want——
+  // 以前用 got-prevFrames 算，CTX 一放大就会把预热帧留在片子里（多出 1 秒重复内容）。
+  // 🔴 段2 在整片里的起点就是「前面各段总帧数」：concat 已经把重叠帧吃掉，
+  // 从这里往后就是本段自己的内容。绝不能拿 got-target 反推 —— 实测整片实际只有
+  // 396 帧（段2 想要 192+5 重叠，但 H3 帧数只认 17k+5：192 的下一个是 209，
+  // 209 又会超出源片长度被降档回 192），于是段2 的干净内容只有 187 帧，
+  // 用 got-192 算 skip 会少跳 5 帧 → 段2 开头把段1 的最后 5 帧原样重放一遍（用户看到"跳一下/卡一下"）。
+  // 宁可再生段短 5 帧（0.2 秒），也不要重复帧。
+  // 2026-10-25 修：原来 skip=prevFrames（前面各段 shot.frames 之和）。只要中转把 gen_frames 向上取到
+  // 17k+5（209→226）或按源片长度降档（226→209），整片里"前面各段占的帧数"就不等于 frames 之和 ——
+  // 实测 p11 段3：整片 430 帧，frames 之和 418 → want=12（0.5 秒，等于废片）。
+  // 改成按本段声明的 frames 从尾部往前取，与整片长度解耦：skip = got - frames，want = frames。
+  const target = Math.max(2, Math.round(Number(shot.frames) || 0) || (got - prevFrames))
+  // 🔴 2026-10-27：skip 改成「用上一段尾部音频在整片里反解」。
+  //    公式猜不准的实锤：段2 的整片里前段占 170 帧、段3 的整片里前段占 182 帧
+  //    （中转为 17k+5 取整和 CTX 预热各留了不同余量）。上一版用统一公式 170 →
+  //    段3 整段晚 12 帧 = 0.5 秒，实测音频相关度 1.000 精确偏 +0.500s，用户听成「少了一段音乐」。
+  //    prevAbs 传进来就用音频反解；解不出（静音尾巴/相关低）才退回 resnapFrameCount 公式。
+  let skip = Math.max(0, Math.min(prevFrames, got - 2))
+  // 2026-10-28：拿到本段真实生成帧数时，音频起点也是物理真值（= 上一段交付帧数），
+  //   不让包络反解再在 ±6 里挪（实测它反解失败回退、或锚到旁边的峰值，都会让音乐早/晚几帧）。
+  if (prevAbs && prevFrames > 2 && genFrames <= 5) {
+    let seamSec = -1
+    try {
+      seamSec = await danceSeamStart(abs, prevAbs, prevFrames / 24)
+    } catch (e: any) {
+      console.log('[dance-seam] 反解异常，退回公式:', String(e?.message || e).slice(0, 160))
+      seamSec = -1
+    }
+    if (seamSec >= 0) {
+      // 2026-10-28：护栏从 ±24 帧收到 ±6 帧。基线已经是「上一段交付帧数」这个物理真值，
+      // 反解只该微调几帧（整片里音画本身就差 4 帧）；放宽到 ±24 时它会锚到「上一段尾部音频的结束处」
+      // （实测段4 反解出 170 = 基线+12，正好把 0.5 秒错位又找回来）。
+      const lo = Math.max(0, prevFrames - 6)
+      const hi = Math.min(got - 2, prevFrames + 6)
+      skip = Math.min(hi, Math.max(lo, Math.round(seamSec * 24)))
+      console.log(`[dance-seam] ${path.basename(abs)} 实测起点 ${seamSec.toFixed(3)}s (${Math.round(seamSec * 24)} 帧)，公式值 ${prevFrames} 帧 → 用 ${skip} 帧`)
+    } else {
+      console.log(`[dance-seam] ${path.basename(abs)} 反解失败，退回公式 ${prevFrames} 帧`)
+    }
+  }
+  // 🔴 2026-10-27：画面和音频必须**各用各的起点**。整片里音画本身就差 4 帧（实测 p11 段3：
+  //    段2 画面结束在整片第 162 帧、音频结束在第 158 帧，两者相关度都是 1.000）。
+  //    只用音频值 → 画面多带前一段 4 帧 → 接缝处动作重放一拍（用户说的「多了一拍」）。
+  //    画面起点用运动量反解（逐帧），音频起点用包络反解（逐采样）。
+  // 🔴 2026-10-28（用户报「段4 画面跳一下」后实测）：画面起点默认比音频**早 5 帧**。
+  //    接续机制只把上一段末尾 5 帧钉在整片的前 5 帧（AddLatentGuide guide_frames=5, frame_idx=0），
+  //    如果画面也从音频那个点（= 上一段结束后一帧）开始切，这 5 帧钉住的画面就被裁掉 →
+  //    交付的第一帧是模型自由采样的，和上一段毫无像素关系（实测段4 接缝残差 18.4，正常应 2~3）。
+  //    留 5 帧 → 画面与上一段重叠 0.2 秒（衔接无缝），音频仍按 skip 精确对位（音画差 0.2 秒，
+  //    舞蹈 MV 无口型对位，肉眼基本看不出）。这正是「画面/音频各用各的起点」的设计本意。
+  // 2026-10-28（latent 实测量出来的规则）：整片 = 上一段 latent + 本段 latent − 5 帧（concat 丢第二段前 5 帧/2 token）
+  //   → 本段内容在整片里的起点 = 整片帧数 − 本段生成帧数 + 5。
+  //   例：段4 整片 328、gen 158 → 起点 175（原来按「音频-5」取 158，早 17 帧 = 0.7 秒，所以接缝跳）。
+  // 🔴 2026-10-30（用户拍板回 latent 拼接方式，App 侧同步回滚）：
+  //   **重叠量取决于续接方式，不是固定值**。
+  //   · AddGuide（1 帧锚，10-26~10-30 用过）：实测重叠 2 帧 —— 段2[0]≈段1[122] 0.763、
+  //     段2[1]≈段1[123] 0.732、段2[2] 起 0.698/0.656 = 新内容（用户看片：skip=0「手臂重复一下」、skip=2 正确）。
+  //   · latent 拼接（NativeLatentTimelineConcatT8Advanced，现在这套）：整片 = 上一段 latent + 本段 latent
+  //     − 5 帧（concat 丢第二段前 5 帧 / 2 token）⇒ 重新用 10-28 定案的公式，`got − genFrames + 5`。
+  //     例：段4 整片 328、gen 158 → 起点 175（按「音频−5」取 158 会早 17 帧 = 0.7 秒，所以接缝跳）。
+  // 🔴 2026-10-30（方案 B：AddGuide 22 帧硬锚）：guide 现在是「上一段末 22 帧的 mp4」，
+  //   官方把多云帧 batch 当 clip 锚定，前 22 帧逐帧等于上一段成品 ⇒ 段2+ 交付前必须裁掉这 22 帧。
+  //   （latent 拼接时代是 5 帧；AddGuide 1 帧时代实测重叠 2 帧；现在 22。）
+  let frameSkip = genFrames > 5
+    ? DANCE_GUIDE_FRAMES
+    : Math.max(0, skip - DANCE_GUIDE_FRAMES)
+  if (genFrames > 5) console.log(`[dance-motion] ${path.basename(abs)} 画面起点 = CTX ${frameSkip} 帧（整片 ${got}，请求 gen ${genFrames}）；交付 ${Math.max(2, got - frameSkip)} 帧`)
+  // 🔴 2026-10-28（用户第四次听出跳，改实测定案）：整片的**音频和画面同基** —— 两者都从 PREV_START − 5 起
+  //   （mv_core.py 里 src_start = start_frame − DANCE_CTX_FRAMES，音轨也按同一基点贴）。
+  //   所以音频起点不是「上一段交付帧数」，而是和画面同一个数：skip = frameSkip。
+  //   实测三段全部吻合（ncc 0.98~0.99，采样级对齐）：段3 skip163 → 153+163 = 316（旧值）；
+  //   段4 skip163 → 311+163 = 474；本次段3 skip170 → 153+170 = 323（段2 结束 327 → 重复 4 帧 = 用户听到的跳）。
+  if (genFrames > 5) skip = frameSkip
+  // 2026-10-28（用户质询「段4 怎么裁和段3 无关吧」后的定论）：只要拿到了本段真实生成帧数，
+  //   起点由 latent 算出来的就是物理真值，**不再让运动反解去覆盖它**（那个窗口以音频为中心，
+  //   会把 175 拽回 163~169，等于把上一段内容又切进来）。
+  if (prevAbs && prevFrames > 2 && genFrames <= 5) {
+    let motSec = -1
+    try {
+      // 中心用「音频反解值」（skip），不是公式值 prevFrames：
+      // 画面和音频只差几帧，而公式值可能偏 12 帧以上（实测 170 vs 真实 158），
+      // 用公式值当中心会把真匹配点挤出窗口（实测 345 帧整片：真点在 133，窗口 146~194 找不到）。
+      motSec = await danceMotionSeam(abs, prevAbs, skip / 24)
+    } catch (e: any) {
+      console.log('[dance-motion] 反解异常，画面用音频值-5:', String(e?.message || e).slice(0, 160))
+      motSec = -1
+    }
+    if (motSec >= 0) {
+      // 2026-10-28：同样从 ±36 收到 ±6 —— 基线已经是真值，画面只该比音频差几帧（实测 4~5 帧）
+      const lo = Math.max(DANCE_GUIDE_FRAMES, skip - 6)
+      const hi = Math.min(got - 2, skip + 6)
+      frameSkip = Math.min(hi, Math.max(lo, Math.round(motSec * 24)))
+      console.log(`[dance-motion] ${path.basename(abs)} 画面起点 ${motSec.toFixed(3)}s (${Math.round(motSec * 24)} 帧)；音频起点 ${skip} 帧；差 ${frameSkip - skip} 帧`)
+    } else {
+      console.log(`[dance-motion] ${path.basename(abs)} 画面反解失败，沿用「音频起点-5」${frameSkip} 帧（保留钉住的接缝帧）`)
+    }
+  }
+  // 2026-10-28 定论：交付 = 本段生成的内容「全拿走」（got − 画面起点）。
+  //   中转的 gen_frames = 17k+5 网格上 ≥ REQ+5 的值（实测：请求 158 → 生成 175 = 5 帧衔接前缀 + 170 新内容），
+  //   所以每段真正的内容比请求多 12 帧。按请求帧数截，接缝处就会缺 12 帧（实测段2→段3 残差 18.8、相邻帧基线 1.5）。
+  //   段起点改成「前几段实际交付帧数累加」后（见 render 里 dance_start_frame），全拿走才能首尾严格相接。
+  const want = genFrames > 5
+    ? Math.max(2, got - frameSkip)
+    : Math.max(2, Math.min(target, got - skip))
+  if (prevFrames > 2 && want <= 2) return rel   // 整片比本段还短（异常）→ 原样返回，别裁成空片
+  const tmp = abs.replace(/\.mp4$/i, '.tail.mp4')
+  try {
+    await new Promise<void>((resolve, reject) => {
+      // 画面用 trim=start_frame（帧精确），音频用 atrim=start（采样精确）—— 两者起点可以不同。
+      // 同一文件喂两个 input：[0] 取画面、[1] 取音频，互不影响。
+      // 2026-10-26 的教训仍有效：mp4 里的 aac 只能给 209920 采样（少 747），所以音频另出一份 .seg.wav。
+      ffmpeg(abs).input(abs)
+        .complexFilter([
+          `[0:v]trim=start_frame=${frameSkip}:end_frame=${frameSkip + want},setpts=PTS-STARTPTS[v]`,
+          `[1:a]atrim=start=${(skip / 24).toFixed(6)}:end=${((skip + want) / 24).toFixed(6)},asetpts=PTS-STARTPTS,aresample=32000[a]`,
+        ])
+        .outputOptions(['-map', '[v]', '-map', '[a]',
+          '-c:v', 'libx264', '-crf', '18', '-preset', 'veryfast', '-pix_fmt', 'yuv420p',
+          '-c:a', 'aac', '-b:a', '192k', '-movflags', '+faststart', '-y'])
+        .on('end', () => resolve()).on('error', (e: Error) => reject(e)).save(tmp)
+    })
+    // 额外写一份 PCM 音轨给拼接用：MP4 里的 aac/alac 都按固定样本块存（1024/4096），
+    // 装不下 158/24 = 210666.7 这种非整数采样长度，每段音频会短几十~上百毫秒，拼起来后半段就卡。
+    // 必须在这里做 —— rename 之前 abs 还是原始整片。
+    try {
+      const wavOut = abs.replace(/\.mp4$/i, '.seg.wav')
+      await new Promise<void>((resolve) => {
+        ffmpeg(abs).outputOptions([`-ss ${(skip / 24).toFixed(6)}`, `-t ${(want / 24).toFixed(6)}`,
+          '-vn', '-c:a', 'pcm_s16le', '-ar', '32000', '-ac', '1', '-y'])
+          .on('end', () => resolve()).on('error', () => resolve()).save(wavOut)
+      })
+    } catch { /* 拼接会退回 mp4 音轨 */ }
+    // 🔴 2026-10-28：空片保护 —— 并发裁剪时 ffmpeg 可能读到被换掉的旧文件，产出几百字节的空 mp4
+    //    并把成品覆盖掉（实测段4 变成 261 字节）。小于 10KB 一律当失败，保留原文件。
+    if (!fs.existsSync(tmp) || fs.statSync(tmp).size < 10000) {
+      throw new Error(`裁切产出异常（${fs.existsSync(tmp) ? fs.statSync(tmp).size : 0} 字节），保留原片`)
+    }
+    fs.renameSync(tmp, abs)
+  } catch (err: any) {
+    logTaskError('MV', 'trim-dance-tail', { rel, error: err?.message })
+    try { fs.rmSync(tmp, { force: true }) } catch { /* 忽略 */ }
   }
   return rel
 }
@@ -409,6 +748,19 @@ function to32kWav(input: string, output: string): Promise<void> {
   })
 }
 
+/** 续接段在中转整片里实际占的帧数：中转按 snap17(frames + DANCE_CTX) 生成、再减掉 CTX。
+ *  段2/3 实测：frames=158 → snap17(163)=175 → 占 170 帧（整片 345 = 170 + 175 可验）。
+ *  拼接裁切必须用这个数当起点，用请求帧数会少跳 12 帧、片头重复上一段画面。 */
+/** AddGuide 锚定的帧数（喂给节点的 IMAGE batch 长度）。官方合法值 5 / 22 / 39（17k+5）。 */
+const DANCE_GUIDE_FRAMES = 22
+const DANCE_CTX = 5
+function resnapFrameCount(frames: number): number {
+  const f = Math.max(2, Math.round(frames || 0))
+  const k = Math.ceil((f + DANCE_CTX - 5) / 17)   // 中转是 _snap17_up（向上取整）
+  const gen = Math.min(3600, Math.max(5, 5 + 17 * k))
+  return Math.max(2, gen - DANCE_CTX)
+}
+
 /** 帧网格 5+17k（H3 只认这个）：5.167s ~ 14.375s */
 function snapFrames(seconds: number): number {
   const f = Math.round(seconds * 24)
@@ -510,11 +862,70 @@ async function shotRefs(projectId: number, shot: any) {
   return picked
 }
 
-/** 2026-10-19：公共素材库（scope='library'，所有 MV 共用） */
-async function libraryAssetsOf(kind?: Kind) {
-  const rows = await db.select().from(schema.mvAssets).where(
-    kind ? and(eq(schema.mvAssets.scope, 'library'), eq(schema.mvAssets.kind, kind)) : eq(schema.mvAssets.scope, 'library'))
-  return rows.sort((a, b) => (Number(a.sortOrder || 0) - Number(b.sortOrder || 0)) || a.id - b.id)
+/**
+ * 本段的中文舞步描述（取自项目 outline 里与本段时间窗重叠的条目）。
+ * dance 模板要把它翻成英文点名进 detailed_description：只写「逐帧复刻参考视频」时
+ * 动作跟随会松（官方 Ref 指南要求 dd 写清 actions and state changes；社区实测「动作跟不住要 direct prompting」）。
+ */
+function danceActionText(project: any, shot: any): string {
+  let list: any[] = []
+  try { const v = JSON.parse(String(project?.outline || '[]')); if (Array.isArray(v)) list = v } catch { return '' }
+  const s0 = Number(shot?.startSeconds) || 0
+  const s1 = Number(shot?.endSeconds) || (s0 + (Number(shot?.seconds) || 0))
+  // 🔴 2026-10-26：每条前面带「它在本段里实际占几秒」。
+  //    原来是等量平铺 —— 实测段3（13.17~19.75s）跨 outline 三条：
+  //      第3条 只占 0.83s → 分到 60 字符
+  //      第4条 占 4.50s（高抬腿踢腿+双臂甩臂，全片动作最猛）→ 只分到 48 字符
+  //    结果成片 2.5~4.5s（= 第4条那 4.5 秒）SSIM 掉到 0.309~0.389，模型在那段自己补出一张脸；
+  //    前后两条都正常（0.42~0.47）。带 span 交给翻译按占比分配篇幅。
+  return list
+    .filter((o) => Number(o?.end) > s0 + 0.2 && Number(o?.start) < s1 - 0.2 && String(o?.what || '').trim())
+    .sort((a, b) => Number(a.start) - Number(b.start))
+    .map((o) => {
+      const span = Math.min(Number(o.end), s1) - Math.max(Number(o.start), s0)
+      return `${Math.max(0.1, Math.round(span * 10) / 10)}s: ${String(o.what).trim()}`
+    })
+    .join('\n')
+    .slice(0, 320)
+}
+
+/**
+ * 场景图在 `referenceImageUrls` 里的序号（1 起）—— dance 模板要用它把场景钉成 `<Subject N>`。
+ * 缺失时退回 2（shotRefs 默认顺序 = 人物、场景）。
+ */
+function danceScenePic(picked: any[]): number {
+  const i = (picked || []).findIndex((a) => String(a?.kind) === 'scene')
+  return i >= 0 ? i + 1 : 2
+}
+
+/**
+ * 素材库口径：同一张卡只列一次（kind + 名字 + 图片都相同就算同一张）。
+ * 2026-10-28：从素材库「选择已有人物/场景」挑进来的是副本行，按行列出就会「挑一次多一张一样的卡」。
+ */
+function dedupeAssets<T extends any>(rows: T[]): T[] {
+  const seen = new Set<string>()
+  return [...rows]
+    .sort((a: any, b: any) => (Number(a.sortOrder || 0) - Number(b.sortOrder || 0)) || a.id - b.id)
+    .filter((a: any) => {
+      const k = `${a.kind}|${a.name || ''}|${a.image || ''}`
+      if (seen.has(k)) return false
+      seen.add(k)
+      return true
+    }) as T[]
+}
+
+/**
+ * 公共素材库（scope='library'，所有 MV 共用）。
+ * 2026-10-28：带上 seriesId 时一并返回本项目（同系列各首歌）的人物/场景 —— 「选择已有人物/场景」
+ * 看到的就是 MV 素材库 Tab 里那批，不再只有公共库里那一条；excludeProjectId 排掉当前这首歌已有的。
+ */
+async function libraryAssetsOf(kind?: Kind, seriesId?: number, excludeProjectId?: number) {
+  const rows = (await db.select().from(schema.mvAssets)).filter((a) => (
+    (!kind || a.kind === kind)
+    && (!excludeProjectId || a.projectId !== excludeProjectId)
+    && (a.scope === 'library' || (seriesId != null && a.seriesId === seriesId))
+  ))
+  return dedupeAssets(rows)
 }
 
 /** 道具名的可匹配写法：全名 + 去掉类目后缀 + 前两个字（歌词里常只写简称，如「宵夜」） */
@@ -670,12 +1081,12 @@ app.get('/series', async (c) => {
   for (const r of rows) {
     const songs = await db.select().from(schema.mvProjects)
       .where(and(eq(schema.mvProjects.seriesId, r.id), isNull(schema.mvProjects.deletedAt)))
-    const assets = allAssets.filter((a) => a.seriesId === r.id)
+    const assets = dedupeAssets(allAssets.filter((a) => a.seriesId === r.id))
     out.push({
       ...r,
       songCount: songs.length,
       assetCount: assets.length,
-      // 封面 = 项目里第一张已出的**场景图**（照短剧首页口径：场景图是单幅完整画面，适合当封面；人物图是四格参考板不拿来当封面）。
+      // 封面 = 项目里第一张已出的**场景图**（照短剧首页口径：场景图是单幅完整画面，适合当封面；人物图是三格参考板不拿来当封面）。
       // 没有场景图就用首字兜底。状态按「有没有 MV」派生（不加列）
       cover: assets.find((a) => a.kind === 'scene' && !!a.image)?.image || null,
       status: songs.length ? 'active' : 'empty',
@@ -697,12 +1108,11 @@ app.get('/series/:sid', async (c) => {
   const songs = await db.select().from(schema.mvProjects)
     .where(and(eq(schema.mvProjects.seriesId, sid), isNull(schema.mvProjects.deletedAt)))
     .orderBy(desc(schema.mvProjects.id))
-  const assets = (await db.select().from(schema.mvAssets))
-    .filter((a) => a.seriesId === sid || songs.some((s) => s.id === a.projectId))
-    .sort((a, b) => (Number(a.sortOrder || 0) - Number(b.sortOrder || 0)) || a.id - b.id)
+  const rows = await db.select().from(schema.mvAssets)
+  const assets = dedupeAssets(rows.filter((a) => a.seriesId === sid || songs.some((s) => s.id === a.projectId)))
   const shots = await db.select().from(schema.mvShots)
   const items = songs.map((p) => {
-    const mine = assets.filter((a) => a.projectId === p.id)
+    const mine = rows.filter((a) => a.projectId === p.id)
     return {
       ...p,
       cover: mine.find((a) => !!a.image)?.image || p.outputUrl || null,
@@ -803,12 +1213,20 @@ app.delete('/projects/:id', async (c) => {
   return success(c, { ok: true })
 })
 
-app.get('/projects/:id', async (c) => {
-  const id = Number(c.req.param('id'))
-  const project = await loadProject(id)
-  if (!project) return notFound(c, 'MV 项目不存在')
-  const shots = await shotsOf(id)
-  // 顺手把在跑的任务状态同步进来（页面只轮询这一个接口）
+/**
+ * 把在跑的生成任务状态同步回 mv_shots（含舞蹈段裁切、落库、耗时、封面）。
+ * 🔴 原来这段逻辑只写在 GET /projects/:id 里 —— 只有页面轮询才触发，没人打开那一页就永远不裁
+ *    （2026-10-28 实测：段4 两次都交付 328 帧整片、库里 videoUrl 不更新、日志里连 dance-seam 都没有）。
+ *    现在抽成函数：路由调它（保持原行为），下面的定时器也调它（不依赖前端）。
+ */
+async function syncShotTasks(project: any): Promise<void> {
+  // 🔴 2026-10-28：定时器和页面轮询会同时进来（实测 19:58:09 / 19:58:11 两次同时裁同一个文件 →
+  //    第二次读到被 rename 掉的旧 inode，产出 261 字节空片并覆盖了成品）。同一项目串行。
+  const _pid = Number(project.id)
+  if (_syncBusy.has(_pid)) return
+  _syncBusy.add(_pid)
+  try {
+  const shots = await shotsOf(Number(project.id))
   for (const s of shots) {
     if (s.status === 'processing' && s.taskId) {
       const [t] = await db.select().from(schema.sysTask).where(eq(schema.sysTask.id, Number(s.taskId)))
@@ -821,7 +1239,49 @@ app.get('/projects/:id', async (c) => {
             try { hist = JSON.parse(String(s.history || '[]')) } catch { hist = [] }
             patch.history = JSON.stringify([s.videoUrl, ...hist.filter((h) => h !== s.videoUrl)].slice(0, 20))
           }
-          patch.videoUrl = await trimToSegment(t.localPath, s, project.songFile as string)   // 多给的 warmup 前导帧裁掉，否则拼接口型错位
+          // 舞蹈 MV 不能按 shot.frames 裁：续段拿回来的是 latent 拼接后的整片（396 帧），
+          // 裁成 192 帧就变成「首段画面 + 无音轨」（trimToSegment 里 -an 且舞蹈没有原曲可切）。
+          // 舞蹈续段拿到的是整片（latent 拼接结果）→ 只取尾部本段那一段，保留音轨；
+          // 首段长度本来就等于本段，函数里会直接返回原文件。
+          const _isDanceShot = String(project.kind || 'song') === 'dance'
+          // 前面各段的帧数之和 = 本段在整片里的起始帧（不能拿整片长度减本段长度倒推，
+          // 那会用 DB 里的旧 frames 算出偏移，实测多裁 12 帧、段2 错位）
+          // 整片只含「上一段 + 本段」两段（31 节点只载入最后一段 latent），不是全部前序段。
+          // 所以本段在整片里的起点 = 紧邻上一段的帧数，累加所有前序段会多减（段3 会从 316 起裁 → 只剩 29 帧）。
+          const _prevShot = _isDanceShot
+            ? shots.filter((x) => (Number(x.shotNumber) || 0) < (Number(s.shotNumber) || 0))
+                .sort((a, b) => (Number(b.shotNumber) || 0) - (Number(a.shotNumber) || 0))[0]
+            : undefined
+          // 🔴 2026-10-26 修接缝重复帧：原来直接拿上一段的 shot.frames（App 请求帧数，
+          //    如 158）当起点，但中转整片里上一段实际占的是 snap17(frames+CTX)-CTX。
+          //    实测段3：整片 345 帧 = 上一段 170 + 本段 175，而 skip 取 158 →
+          //    取到「段2 尾部多 12 帧 + 本段前 146 帧」，成片开头重复段2 画面
+          //    （量接缝：段2 末帧 vs 段3 0.167s 的 SSIM 0.972）。
+          // 🔴 2026-10-28（用户听出「段3 音乐跳了一下」后实测）：基线必须是上一段**真实交付帧数**。
+          //    原来 `resnapFrameCount(frames)` 把 158 抬成 170，反解一失败就退回 170 →
+          //    整段（含音轨）后移 12 帧 = 0.49s（实测段3 音轨落在源片 13.66s，应 13.17s；
+          //    段4 落在 20.24s，应 19.75s；段2 只偏 1 帧所以听不出来）。
+          //    算式实锤：整片音频从 PREV_START 起，skip 170 → 6.58+170/24 = 13.663s = 实测值，
+          //    所以本段在整片里的起点就等于上一段交付帧数（158），17 帧吸附多出来的量不该算进来。
+          // 🔴 2026-10-28（用户「段3 和段2 音乐又不连续」）：基线必须是上一段**实际交付帧数**，
+          //    不能再用 shot.frames（计划值 158）。算式：整片音轨从 PREV_START 起，音频 skip 的物理真值
+          //    = 本段起点 S_n − PREV_START = 上一段交付帧数（段3 = 170）。用计划的 158+5=163 当基线，
+          //    音频就落在源片 321 帧、画面在 328 帧 → 音乐比画面早 7 帧（0.29s）= 听着跳一下。
+          const _prevFrames = _prevShot
+            ? (await countVideoFrames(getAbsolutePath(String(_prevShot.videoUrl || ''))) ||
+               Math.max(0, Math.round(Number(_prevShot.frames) || 0)))
+            : 0
+          // 上一段的绝对路径：裁切时用它尾部音频反解本段在整片里的真实起点（方案 A）
+          const _prevAbs = _prevShot?.videoUrl ? getAbsolutePath(String(_prevShot.videoUrl)) : undefined
+          let _genFrames = 0
+          try {
+            const _pp = JSON.parse(String((t as any).params || '{}'))
+            const _gf = Number(_pp?.timing?.genFrames)
+            if (Number.isFinite(_gf) && _gf > 0) _genFrames = Math.round(_gf)
+          } catch { _genFrames = 0 }
+          patch.videoUrl = _isDanceShot
+            ? await trimDanceSegmentTail(t.localPath, s, _prevFrames, _prevAbs, _genFrames)
+            : await trimToSegment(t.localPath, s, project.songFile as string)   // 多给的 warmup 前导帧裁掉，否则拼接口型错位
           // 耗时口径照短剧：优先用中转/ComfyUI 回报的真值 timing.genSeconds（纯生成），没有才退回挂钟差
           let genSec = 0
           try {
@@ -844,6 +1304,35 @@ app.get('/projects/:id', async (c) => {
       }
     }
   }
+  } finally { _syncBusy.delete(_pid) }
+}
+
+// 不依赖前端轮询：每 12 秒自己扫一遍「有段在 processing」的项目跑同一套同步。
+// 唯一代价是偶发并发（页面轮询 + 定时器同时进来）会各裁一次；裁切函数对已裁过的文件是幂等的
+// （skip 超界时 want ≤ 2 直接原样返回），不会把片子越裁越短。
+const _syncBusy = new Set<number>()
+setInterval(() => {
+  void (async () => {
+    try {
+      const rows = await db.select().from(schema.mvShots).where(eq(schema.mvShots.status, 'processing'))
+      const ids = [...new Set(rows.map((r: any) => Number(r.projectId)).filter(Boolean))]
+      for (const pid of ids) {
+        // 锁在 syncShotTasks 里面（它自己也加锁）—— 这里再加一层会让内层直接 return，定时器永远不干活
+        const p = await loadProject(pid)
+        if (p) await syncShotTasks(p)
+      }
+    } catch (e: any) {
+      console.log('[mv-sync] 定时同步失败', String(e?.message || e).slice(0, 200))
+    }
+  })()
+}, 12000)
+
+app.get('/projects/:id', async (c) => {
+  const id = Number(c.req.param('id'))
+  const project = await loadProject(id)
+  if (!project) return notFound(c, 'MV 项目不存在')
+  await syncShotTasks(project)
+  const shots = await shotsOf(id)
   // 历史视频：只认本段 task_ids 里记的任务（短剧分镜 id 与 MV 段 id 会撞号，不能用 storyboard_id 反查）
   const taskOwner = new Map<number, number>()
   const allTaskIds: number[] = []
@@ -877,7 +1366,9 @@ app.get('/projects/:id', async (c) => {
     if (c1 && (!lastDone || Date.parse(c1) > Date.parse(lastDone))) lastDone = c1
   }
   return success(c, {
-    project, assets: await assetsOf(id), libraryAssets: await libraryAssetsOf(), shots, merges,
+    project, assets: await assetsOf(id),
+    libraryAssets: await libraryAssetsOf(undefined, Number((project as any).seriesId) || undefined, id),
+    shots, merges,
     videoTasks: tasks.map((t: any) => ({
       id: t.id, shotId: ownerShotId(t.id), url: t.localPath || t.resultUrl || '',
       status: t.status, createdAt: t.createdAt, startedAt: effStart.get(Number(t.id)) || t.createdAt,
@@ -976,27 +1467,42 @@ app.post('/projects/:id/dance', async (c) => {
       kind: 'dance', danceSource: srcName, danceRefSource: refName, danceFrames: totalFrames,
       songSeconds: Math.round((totalFrames / 24) * 1000) / 1000, updatedAt: now(),
     } as any).where(eq(schema.mvProjects.id, id))
-    // 自然切段：清旧段 → 按 17n+5 网格 + 每段 ≤345 帧重排
-    const segs = planDanceSegments(totalFrames)
-    const ts = now()
-    await db.delete(schema.mvShots).where(eq(schema.mvShots.projectId, id))
-    for (const g of segs) {
-      await db.insert(schema.mvShots).values({
-        projectId: id, shotNumber: g.index,
-        startSeconds: g.startFrame / 24, endSeconds: (g.startFrame + g.frames) / 24,
-        frames: g.frames, seconds: Math.round((g.frames / 24) * 1000) / 1000,
-        shotSize: 'medium-wide', camera: 'static', vocalState: 'non_vocal',
-        status: 'pending', createdAt: ts, updatedAt: ts,
-      } as any)
-    }
+    // 自然切段：清旧段 → 按 17n+5 网格 + 每段 ≤「最长分镜」重排
+    const segs = planDanceSegments(totalFrames, danceMaxFrames(project.maxShotSeconds))
+    await rebuildDanceShots(id, segs)
     logTaskSuccess('MV', 'dance-upload', { id, frames: totalFrames, shots: segs.length })
     return success(c, {
       frames: totalFrames, seconds: Math.round((totalFrames / 24) * 1000) / 1000,
       source: srcName, ref: refName, shots: segs,
+      dropped: segs.length ? segs[segs.length - 1].dropped : totalFrames,
     })
   } catch (err: any) {
     logTaskError('MV', 'dance-upload', { id, error: err?.message })
     return serverError(c, err?.message || '舞蹈视频适配失败')
+  }
+})
+
+/** 舞蹈 MV：按页面填的「最长分镜」重切（不重传视频，源片帧数已存库里） */
+app.post('/projects/:id/dance-split', async (c) => {
+  const id = Number(c.req.param('id'))
+  const project = await loadProject(id)
+  if (!project) return notFound(c, 'MV 项目不存在')
+  if (String(project.kind || 'song') !== 'dance') return badRequest(c, '这不是舞蹈 MV 项目')
+  const totalFrames = Number(project.danceFrames) || 0
+  if (totalFrames < DANCE_MIN_FRAMES) return badRequest(c, '还没上传参考视频（先上传，后台会自动切段）')
+  const body = await c.req.json().catch(() => ({} as any))
+  const maxS = Math.min(HARD_MAX_S, Math.max(5, Number(body.max_seconds || project.maxShotSeconds) || DEFAULT_MAX_S))
+  try {
+    const segs = planDanceSegments(totalFrames, danceMaxFrames(maxS))
+    if (!segs.length) return badRequest(c, '源片太短，切不出合法段')
+    await rebuildDanceShots(id, segs)
+    await db.update(schema.mvProjects).set({ maxShotSeconds: maxS, status: 'shots', updatedAt: now() })
+      .where(eq(schema.mvProjects.id, id))
+    logTaskSuccess('MV', 'dance-split', { id, frames: totalFrames, shots: segs.length, maxS })
+    return success(c, { max_seconds: maxS, shots: segs, dropped: segs[segs.length - 1].dropped })
+  } catch (err: any) {
+    logTaskError('MV', 'dance-split', { id, error: err?.message })
+    return serverError(c, err?.message || '重新切段失败')
   }
 })
 
@@ -1008,13 +1514,40 @@ app.post('/projects/:id/dance-prompts', async (c) => {
   const shots = await db.select().from(schema.mvShots)
     .where(eq(schema.mvShots.projectId, id)).orderBy(schema.mvShots.shotNumber)
   if (!shots.length) return badRequest(c, '还没有段，先上传参考视频')
+  const body: any = await c.req.json().catch(() => ({}))
+  // 每次点「编译舞蹈提示词」都真调模型翻译（body.regenerate 只是显式声明；不传也按 true 走）
+  // —— 否则同一段中文第二次编译直接命中内存缓存，点了像没执行（用户 2026-10-24 报的）
+  const regen = body?.regenerate === undefined ? true : !!body.regenerate
   const total = shots.length
   let n = 0
+  // 服装/场景以资产为准：项目层 characterPrompt/scenePrompt 大多为空，靠它们会退化成通用兜底句，
+  // 模型每段各理解一遍服装 → 跨段换衣。这里与出片路由取同一来源，保证「点编译」和「出片」一致。
+  const assets = await db.select().from(schema.mvAssets).where(eq(schema.mvAssets.projectId, id))
+  const charAsset = assets.find((a) => a.kind === 'character')
+  const sceneAsset = assets.find((a) => a.kind === 'scene')
+  const outfit = String(charAsset?.styling || charAsset?.appearance || '').trim()
+  // 🔴 三份描述**只翻一次**，全部段共用同一份英文：
+  //    每段各翻一次的话，模型每次措辞都不同 → 段1 和段2 的人物/服装描述对不上 → 跨段漂移。
+  const whoRaw = danceWhoText(project, charAsset)
+  const sceneRaw = project.scenePrompt || sceneAsset?.description || ''
+  // 串行：三并发容易撞超时（见 compileDancePromptEn 注释）
+  const whoEn = await toEnglish(whoRaw, project.textConfigId ?? null, false, regen)
+  const outfitEn = await toEnglish(outfit, project.textConfigId ?? null, false, regen)
+  const sceneEn = await toEnglish(sceneRaw, project.textConfigId ?? null, true, regen)
+  // 画风预设的英文风格头（只取标记之前那段）；查不到就是空串 → 模板退回「a <key> dance clip」
+  const styleHead = (await getStyleSpecByValue(project.style)).head
   for (const sh of shots) {
-    const en = compileDancePrompt({
-      characterPrompt: project.characterPrompt || '', scenePrompt: project.scenePrompt || '',
-      style: project.style || '', frames: Number(sh.frames) || 124,
+    const en = await compileDancePromptEn({
+      characterPrompt: whoEn, outfit: outfitEn, scenePrompt: sceneEn,
+      style: project.style || '', styleHead, frames: Number(sh.frames) || 124,
       shotNo: Number(sh.shotNumber) || 1, totalShots: total,
+      // 🔴 2026-10-26：原来这里没传 actionZh ——「编译舞蹈提示词」编出来的稿子天生
+      //    没有 `the sequence of moves` 那句，界面显示 6821 字符/四段完全一样，
+      //    而点「生成视频」走的是另一条带 actionZh 的路径、会重新编译覆盖。
+      //    于是界面上核对到的提示词 ≠ 实际出片用的提示词（段1/段2 成片好、界面看不到动作句）。
+      //    补上，让两条路径编出同一份。
+      actionZh: danceActionText(project, sh),
+      force: false,                  // 译文已在上面翻好，这里不再翻
     })
     const zh = compileDancePromptZh({ frames: Number(sh.frames) || 124,
       shotNo: Number(sh.shotNumber) || 1, totalShots: total })
@@ -1153,10 +1686,19 @@ appearance 只写脸/身形容貌，styling 只写服装配饰；拆不出来就
     // 同名提醒：素材库里已经有同名角色/场景时**不擅自决定**，交前端问一句「用库里的还是新提取的」
     const libs = await libraryAssetsOf()
     const key = (s: any) => String(s || '').replace(/\s+/g, '').trim()
+    // 同名判定放宽到「一方包含另一方」：库里「林小雅」要能对上提取出的「小雅」，
+    // 否则名字稍有差别就漏掉，用户就会重复建人（2026-10-24 用户点名要优先用库里的）。
+    const sameName = (x: any, y: any) => {
+      const a = key(x), b2 = key(y)
+      if (!a || !b2) return false
+      if (a === b2) return true
+      const [short, long] = a.length <= b2.length ? [a, b2] : [b2, a]
+      return short.length >= 2 && long.includes(short)
+    }
     const conflicts = fresh
-      .filter((a: any) => !a.image && libs.some((l: any) => key(l.name) === key(a.name) && l.kind === a.kind))
+      .filter((a: any) => !a.image && libs.some((l: any) => sameName(l.name, a.name) && l.kind === a.kind))
       .map((a: any) => {
-        const l = libs.find((x: any) => key(x.name) === key(a.name) && x.kind === a.kind) as any
+        const l = libs.find((x: any) => sameName(x.name, a.name) && x.kind === a.kind) as any
         return { assetId: a.id, name: a.name, kind: a.kind, libraryId: l.id, libraryName: l.name, hasImage: !!l.image }
       })
     return success(c, { assets: fresh, conflicts })
@@ -1191,10 +1733,11 @@ app.delete('/projects/:id/assets/:aid', async (c) => {
   const aid = Number(c.req.param('aid'))
   const doomed = await assetInProject(id, aid)
   if (!doomed) return notFound(c, '资产不存在')
-  // 素材库(scope='library')里的条目不许从「资产制作」删掉 —— 这里只是取消本项目的卡片：
-  // 把 project_id 摘成 0（0 = 不隶属任何项目，纯库条目），素材库和其他 MV 都不受影响。
-  if (String((doomed as any).scope || 'project') === 'library') {
-    await db.update(schema.mvAssets).set({ projectId: 0, seriesId: null, updatedAt: now() } as any)
+  // 2026-10-28：这里的删除只管「这首 MV 里的卡片」。素材库条目、别人歌里的行、图/卡文件一律不动：
+  // 只把 project_id 摘成 0（0 = 不隶属任何歌），series_id 保留，所以项目素材库 Tab 里照旧看得见。
+  const owned = Number((doomed as any).projectId) === id
+  if (!owned || String((doomed as any).scope || 'project') === 'library') {
+    await db.update(schema.mvAssets).set({ projectId: 0, updatedAt: now() } as any)
       .where(eq(schema.mvAssets.id, aid))
     return success(c, { assets: await assetsOf(id), keptInLibrary: true })
   }
@@ -1241,10 +1784,10 @@ app.post('/projects/:id/assets/:aid/prompt', async (c) => {
       `1. **第一段必须是画风（原样照抄，一个字都不要改、不要翻译）**：${head || '（这个项目没选画风，用写实电影感代替）'}\n` +
       `2. **画风之后用中文写资产本身**：名字 → 样貌（脸/身形，颜色写死唯一值）→ 妆造（服装/配饰，颜色与款式逐字保留）→ 场景（地点/时间/光线/色调/氛围，人物资产才写，场景资产写描述里的全部要点）。\n` +
       `3. 构图按上面那份规范逐字落地：${asset.kind === 'character'
-        ? '一帧画面里从左到右四个竖版画格、纯白背景——格1 脸部特写（只画头到肩颈、正对镜头）；格2 正面全身、格3 左侧面全身、格4 背面全身，这三格**必须用规范里的原话「头部被干净地移除」（head cleanly removed）**，并写明「这一格只画衣服本身，衣领以上直接是纯白背景：没有头、没有脸、没有五官、没有头发、没有后脑、没有耳朵，也没有脖子、没有下巴、没有下颌、没有颈部断口、没有裸露皮肤」；'
+        ? '一帧画面里从左到右三个竖版画格、纯白背景——格1 正面全身、格2 左侧面全身、格3 背面全身，三格都是完整人物：头、脸、五官、发型正常画出，头顶到脚底完整入镜（含鞋），三格景别完全一致、都是全身，不许出现胸像/半身/特写；'
         : '固定视角，前景/中景/后景分层，画面里不出现任何人'}。\n` +
-      `   ⚠️ 三视图**禁止写「无头」「不要头」「颈部裁切」这类词** —— 规范里明写：这样写模型照旧会画头。\n` +
-      `   ⚠️ 人物板最后必须照抄这句收尾：「整张参考板只有格1 一处面部，格2格3格4一律头部被干净地移除、只画衣服本身（领口以上是纯白背景，没有脖子、没有下巴、没有皮肤）」——**别改写成「无头」「没有头」**（实测会画回头、或留下一半脖子和下巴）。\n` +
+      `   ⚠️ 三格一律全身：**禁止写「特写」「胸像」「半身」「大头照」** —— 特写格会被视频模型当成一个镜头照抄，成片开头就出大脸。\n` +
+      `   ⚠️ 人物板最后必须照抄这句收尾：「三个画格都是同一个人的完整全身：同一个脸型、同一套五官、同一个发型与发色，头顶到脚底完整入镜，三格景别一致」。\n` +
       `4. 画风段照抄，后面中文字段必须完整保留；最后可以再跟一小段英文关键词（可选）。\n` +
       `只输出提示词本身，不要解释、不要标题、不要编号、不要 markdown、不要引号包裹。`,
       `资产类型：${asset.kind === 'character' ? '人物' : '场景'}\n` +
@@ -1269,7 +1812,7 @@ app.post('/projects/:id/assets/:aid/prompt', async (c) => {
 
 /**
  * 给资产出图（走 App 图片通道）
- * 人物 = 四格定妆板（左1 正脸特写 + 正视/左侧/背面全身，纯白底，只出现一张脸），尺寸固定 16:9
+ * 人物 = 三格定妆板（正面/左侧/背面三个完整全身，每格都有头有脸，纯白底），尺寸固定 16:9
  * 场景 = 一张场景图，尺寸跟随项目画幅；两者都拼上项目的风格头
  * 用的是上一步「生成提示词」存下来的那条提示词（没生成过不许出图）
  */
@@ -1295,7 +1838,15 @@ function videoSize(project: any): [number, number] {
 // 只提供编排/节奏线索（省一半注意力开销）；人物靠 RefMods 卡锁；主生成完中转自动接修脸。
 const DANCE_MODEL = 'minimax-h3-mv-dance'
 const DANCE_MAX_FRAMES = 345          // 14.375s（H3 单段上限内最大的 17n+5 档）
+const DANCE_MIN_FRAMES = 124          // 5+17×7，H3 单段下限（5.17s）
 const DANCE_REF_SCALE = 0.5           // 参考副本 = 生成尺寸的一半
+
+/** 页面填的「最长分镜」（秒）→ H3 帧网格上限（17n+5，夹在 124~345 帧） */
+function danceMaxFrames(seconds?: number | null): number {
+  const s = Math.min(HARD_MAX_S, Math.max(5, Number(seconds) || DEFAULT_MAX_S))
+  const k = Math.floor((Math.round(s * 24) - 5) / 17)
+  return Math.min(DANCE_MAX_FRAMES, Math.max(DANCE_MIN_FRAMES, 5 + 17 * k))
+}
 
 function probeVideoMeta(file: string): Promise<{ seconds: number; frames: number; fps: number }> {
   return new Promise((resolve) => {
@@ -1341,23 +1892,30 @@ function toDanceMov(input: string, output: string, w: number, h: number): Promis
  * 注意 H3 只认网格帧数，源片总帧数一般不在网格上 → 末尾不足一段的零头**直接丢弃**
  * （最多 123 帧 ≈ 5.1 秒），不做「合并进上一段」——那会把上一段顶出网格（自检抓到的 bug）。
  */
-function planDanceSegments(total: number): { index: number; startFrame: number; frames: number; dropped: number }[] {
+function planDanceSegments(total: number, maxFrames = DANCE_MAX_FRAMES): { index: number; startFrame: number; frames: number; dropped: number }[] {
+  const cap = Math.min(DANCE_MAX_FRAMES, Math.max(DANCE_MIN_FRAMES, Math.round(maxFrames)))
+  // 🔴 2026-10-30（源片不够用）：续接段每段**实际交付 = 规划 + 12 帧左右**（10-28 定案
+  //   「交付 = 整片里本段的内容全拿走，不按规划截短」的代价），最后一个段还多要 5 帧 CTX 窗口。
+  //   按 100% 规划会让前几段把源片吃光：实测 522 帧切 4 段（124/141/124/133），前 3 段实际
+  //   交付 124+153+136 = 413，段4 只剩 522−413 = 109 帧 → ComfyUI 报
+  //   "source becomes 115 frames at 24 fps but target needs 124"，整段失败。
+  //   按 92% 规划，留出的余量（约 8%）刚好覆盖这 12 帧/段 + 5 帧尾巴。
+  const usable = Math.max(DANCE_MIN_FRAMES, Math.floor(total * 0.92))
   const snapUp = (frames: number) => {
     const k = Math.max(7, Math.round((frames - 5) / 17))
-    return Math.min(DANCE_MAX_FRAMES, 5 + 17 * k)
-  }
-  const snapDown = (frames: number) => {
-    const k = Math.max(7, Math.floor((frames - 5) / 17))
-    return Math.min(DANCE_MAX_FRAMES, 5 + 17 * k)
+    return Math.min(cap, 5 + 17 * k)
   }
   const out: { index: number; startFrame: number; frames: number; dropped: number }[] = []
   let start = 0
-  while (total - start >= 124) {
-    const remain = total - start
-    const left = Math.ceil(remain / DANCE_MAX_FRAMES)
-    let frames = snapUp(Math.round(Math.min(remain / left, DANCE_MAX_FRAMES)))
-    if (frames > remain) frames = snapDown(remain)
-    if (frames < 124) break
+  while (usable - start >= DANCE_MIN_FRAMES) {
+    const remain = usable - start
+    // 段数按 cap 算，但均分后每段会低于 H3 下限（124 帧）时就少切一段 ——
+    // 否则 240 帧/最长 10s 会切出「1 段 124 帧 + 丢弃 116 帧」（实测：源片一半没了）
+    let left = Math.ceil(remain / cap)
+    while (left > 1 && Math.floor(remain / left) < DANCE_MIN_FRAMES) left--
+    let frames = snapUp(Math.round(Math.min(remain / left, cap)))
+    if (frames > remain) frames = remain   // 不 snapDown：向下取整会漏掉末尾几帧（203→192 漏 11 帧）；中转 _snap17_up 会收口
+    if (frames < DANCE_MIN_FRAMES) break
     out.push({ index: out.length + 1, startFrame: start, frames, dropped: 0 })
     start += frames
   }
@@ -1366,11 +1924,367 @@ function planDanceSegments(total: number): { index: number; startFrame: number; 
   return out
 }
 
+/** 清掉旧段 → 按 planDanceSegments 的结果重建分镜表（上传和「重新切分」共用） */
+async function rebuildDanceShots(projectId: number, segs: ReturnType<typeof planDanceSegments>) {
+  const ts = now()
+  await db.delete(schema.mvShots).where(eq(schema.mvShots.projectId, projectId))
+  for (const g of segs) {
+    await db.insert(schema.mvShots).values({
+      projectId, shotNumber: g.index,
+      startSeconds: g.startFrame / 24, endSeconds: (g.startFrame + g.frames) / 24,
+      frames: g.frames, seconds: Math.round((g.frames / 24) * 1000) / 1000,
+      shotSize: 'medium-wide', camera: 'static', vocalState: 'non_vocal',
+      status: 'pending', createdAt: ts, updatedAt: ts,
+    } as any)
+  }
+}
+
 /**
  * 舞蹈段提示词（英文六段式）：动作来源写死 <Video 1>，人物/场景措辞直接沿用项目里那套字段，
  * 音频声明 <Audio 1>（分段 = 源片同一时间窗的原音，成片顺序拼接即成完整原声）。
  */
 /** 舞蹈段的中文导演分镜稿（界面显示用）：动作/机位全部来自源片，所以只交代「复刻参考视频」。 */
+/** 中文 → 英文（内存缓存；纯英文直接返回、不调 LLM）。
+ *  为什么要翻：H3 的六段式是英文骨架，而资产的 appearance/styling/scene 都是中文，
+ *  实测一条 5000 字符提示词里塞了 609 个中文字 —— 背景/服装约束权重被削，模型回头看源片。 */
+const _enCache = new Map<string, string>()
+/**
+ * 翻译结果落盘缓存（按原文做 key）：内存缓存一重启就空，同一份场景中文每次生成都重译，
+ * 而翻译是随机的 —— 实测同一个场景，一次翻出 351 字符（含装饰条纹/地面纹理/拱门/糖果色），
+ * 背景锁住一半；另一次翻出 230 字符笼统版（只剩 outdoor plaza / colorful storefronts），
+ * 背景整块变回源片。落盘后同一资产永远用同一个英文版。
+ */
+const _EN_CACHE_FILE = path.join(DATA_ROOT, 'cache', 'en-translations.json')
+let _enDiskMemo: Record<string, string> | null = null
+function enDiskRead(): Record<string, string> {
+  if (_enDiskMemo) return _enDiskMemo
+  try { _enDiskMemo = JSON.parse(fs.readFileSync(_EN_CACHE_FILE, 'utf8')) || {} } catch { _enDiskMemo = {} }
+  return _enDiskMemo!
+}
+function enDiskWrite(k: string, v: string) {
+  try {
+    const d = enDiskRead()
+    if (d[k] === v) return
+    d[k] = v
+    fs.mkdirSync(path.dirname(_EN_CACHE_FILE), { recursive: true })
+    fs.writeFileSync(_EN_CACHE_FILE, JSON.stringify(d))
+  } catch { /* 缓存写失败不影响生成 */ }
+}
+const _TR_FULL = 'You are a translator for a video-generation prompt. Translate the Chinese into concise, concrete English. ' +
+  // 🔴 2026-10-30：这条指令同时喂给 who / outfit / 非舞蹈 scene。原来紧跟在后面的
+  //   `Preserve EVERY detail — never summarise and never omit: walls, windows, doors, furniture...`
+  //   与下面的 "skip performance" 直接对打，模型选了「一项都不许省」，结果把
+  //   「when she begins to sing, the gaze gradually opens...」「a thin layer of mist...」
+  //   「a stillness that holds feeling inward」整句翻进人物描述 → H3 照着演。
+  //   现在：(1) 先立"只写看得见的外形"这条铁律；(2) 场景类名词从必保清单里拿掉（本字段不是场景）；
+  //   (3) 把实测漏网的词点名禁掉。
+  'Describe ONLY what is visible on the person: face, hair, skin, build, outfit, makeup. ' +
+  'Never translate anything that would become an ACTION on screen: singing, humming, grinning, smiling, ' +
+  'tilting the head, breathing, nodding, winking, blinking, laughing, frowning, pouting, glancing around, ' +
+  'when she moves, at the close, throughout the take. Such sentences must NOT appear in your output. ' +
+  // 🔴 2026-10-30：静态神态（目光/气质/沉静）是她「长什么样」的一部分，必须保留 ——
+  //   上一轮连这些一起禁掉，人物段只剩虹膜+肤色+发型，实测段1 出大脸、后段人脸不稳。
+  'Static descriptions of her looks and temperament ARE part of her appearance — keep them ' +
+  '(e.g. "steady calm gaze", "quiet contained expression", "the features carry a stillness"). ' +
+  'Preserve every detail OF THE PERSON — never summarise and never omit: garment parts, colours, materials, ' +
+  'body proportions, hairstyle, and every number. ' +
+  'If the source has three sentences about her look, the output must also cover all three (same order). ' +
+  'Drop nothing, add nothing else. Output only the translation, no explanation.'
+// 场景专用：**压缩**翻译 —— 7000 字符的硬上限下，场景全文（实测 807 字符）装不进去，
+// 而「氛围、情绪、装饰性从句」对背景锁定毫无用处，真正有用的是这几个识别要素。
+// 实测这条路 173 字符就把「室内 / 磨光木地板 / 落地镜墙 / 把杆 / 天花板面板灯 / 暖白色调」全带上了。
+const _TR_SCENE = 'Extract the visual identifiers of this scene. Output ONLY a JSON object, no prose:\n' +
+  // 2026-10-28：字段提示里的 (mirror wall / barre) 是舞蹈室偏向，用户会换各种背景 → 改成中性举例。
+  '{"setting":"indoor, or outdoor + how open it is",' +
+  '"walls":"walls and wall surfaces incl. windows, doors or large panels; for an open outdoor scene write what bounds the view (open horizon line, open sky)",' +
+  '"floor":"floor material and finish",' +
+  '"fixtures":"main fixtures or furniture in the scene",' +
+  '"light":"light source + its direction + its INTENSITY (bright / soft / dim)",' +
+  '"palette":"dominant colours, each one named together with what carries it — e.g. warm white stone, light blue sky, green hedges"}\n' +
+  // 🔴 2026-10-30：原来的「list EVERY … 一项都不许省 + 写 sky/dusk tone」让模型自己编内容：
+  //   实测编出 `distant blurred city building outlines`（画到天空成了灰蓝色模糊块）和
+  //   `soft breeze`（风被写进 fixtures，画面发飘）；多出来的词又挤爆 60 词预算，把 palette 顶掉
+  //   → 色温锚点丢失、整片暗 15~20 灰度。现在改成「只写真实存在的实体 + 硬禁摄影/天气词 + 六项必填」。
+  'Every item matters: name the concrete objects that are really there. Never drop a real item. ' +
+  'Name objects, never a general category: write "square stone tiles with thin joint lines" ' +
+  'instead of "light-colored ground". ' +
+  // 🔴 2026-10-30：`walls` 允许留空 —— 10-29 那份能锁背景的提示词里**根本没有 walls 项**。
+  //   硬逼六项必填的后果实测是 `walls: European light-colored stone lamp posts in the background`，
+  //   把灯柱当墙（语义错位），模型拿到一个错的空间结构。
+  'HARD RULES: (1) setting, floor, fixtures, light and palette are all mandatory. ' +
+  'walls may be an empty string ONLY when the scene is open outdoors with nothing bounding the view. ' +
+  // 🔴 2026-10-30 三次修正（对照 10-29 那份能锁住背景的提示词）：
+  //   那版是 `palette: warm white stones, clear light blue sky, soft green hedges` ——
+  //   **每个颜色都绑着它附着的东西，而且有 sky**；`light: bright natural daylight …` 带强度词。
+  //   现在这版退化成 `palette: warm white, light gray, pale blue, green`（纯色板，没有天空、没有实体）
+  //   + `light: natural sunlight from the upper side direction`（没有强度）→ 场景等于没锚，背景回源片。
+  '(1b) palette must name every colour WITH what carries it — "warm white stone, light blue sky, green hedges", ' +
+  'never a bare colour list. For an outdoor scene the sky colour is mandatory. ' +
+  '(1c) light must include an intensity word: bright / strong / soft / dim. ' +
+  '(2) Describe ONLY solid physical things the camera can see. Never describe weather, wind, temperature, ' +
+  'mood, atmosphere or camera optics — never write breeze, wind, draft, mist, haze, fog, dust, ' +
+  'distant, blurred, out of focus, bokeh, depth of field, atmosphere. ' +
+  '(3) fixtures means furniture, lamps and installed fittings only — never air, light, or the open floor area. ' +
+  '(4) Do not invent objects the source does not mention. ' +
+  // 🔴 2026-10-30 二次修正：原来写 4-10 词，模型给 setting 只写 "outdoor" 一个词 ——
+  //   实测场景句从 54 词掉到 45 词后，段1 出大脸特写（背景锚点太弱，模型自己重构图）。
+  //   setting 必须写「地点类型 + 空间开阔/封闭」，其余项 8-16 词。
+  'Each value is an English phrase of 8-16 words, no Chinese characters. ' +
+  'The "setting" field must name the place type AND its openness or enclosure — ' +
+  'write "open urban outdoor city square with wide open horizon edges", never just "outdoor". '
+
+async function toEnglish(text: string | undefined | null, configId?: number | null, compact = false, force = false): Promise<string> {
+  const t = String(text || '').replace(/\s+/g, ' ').trim()
+  if (!t) return ''
+  if (!/[\u4e00-\u9fa5]/.test(t)) return t          // 本来就是英文
+  // 🔴 2026-10-30：key 带上版本号。翻译指令改过（_TR_SCENE 加 HARD RULES、场景六项必填 palette），
+  //   旧 key 命中的是**旧指令翻出来的坏稿**（缺 palette、带 blurred/breeze）—— 不改 key 的话
+  //   「代码修好了、出来的还是旧坏结果」，而且缓存是磁盘级的，重启也不消。改版本号 = 旧条目自然失效。
+  const ck = (compact ? 'S3|' : 'F2|') + t
+  // force = 用户勾了「重新生成」：跳过缓存、真调一次模型（否则同段中文第二次编译直接吃缓存，看着像没执行）
+  if (!force) {
+    const hit = _enCache.get(ck) || enDiskRead()[ck]
+    if (hit) { _enCache.set(ck, hit); return hit }
+  }
+  const call = () => askText(compact ? _TR_SCENE : _TR_FULL,
+    t, compact ? 600 : Math.min(1600, Math.max(400, t.length * 3)), configId)
+  /** 场景 JSON → 带标签的一句（六项齐全才用，否则退回清洗版） */
+  const cleanScene = (raw0: string): string => {
+    const raw = String(raw0 || '').replace(/```(?:json)?/gi, ' ').trim()
+    let labelled = ''
+    try {
+      const j: any = pickJson<any>(raw) || {}
+      const FIELDS: Array<[string, string]> = [
+        ['setting', ''], ['walls', 'walls'], ['floor', 'floor'],
+        ['fixtures', 'fixtures'], ['light', 'light'], ['palette', 'palette'],
+      ]
+      const bits: string[] = []
+      // 每项限词：六项加起来必须塞得进 capWords(sceneLine, 68) 的预算，
+      // 否则靠后的 palette 会被整段砍掉（2026-10-30 实测：walls/floor/fixtures/light 写了 65 词，palette 直接消失 → 画面暗 15 灰度）。
+      const LIMIT: Record<string, number> = { setting: 10, walls: 16, floor: 16, fixtures: 16, light: 16, palette: 14 }
+      let hasPalette = false
+      for (const [k, label] of FIELDS) {
+        let v = String(j?.[k] || '').replace(/\s+/g, ' ').replace(/[.\s]+$/, '').trim()
+        if (!v || /[\u4e00-\u9fa5]/.test(v)) continue
+        const words = v.split(' ').filter(Boolean)
+        const lim = LIMIT[k] || 10
+        if (words.length > lim) v = words.slice(0, lim).join(' ').replace(/[,;.\s]+$/, '')
+        if (k === 'palette') hasPalette = true
+        bits.push(label ? `${label}: ${v}` : v)
+      }
+      // palette 是唯一的色温锚点：缺了整片会变灰变暗（实测 15~20 灰度）⇒ 不完整就整条不采用，
+      // 交给调用方重试一次；仍不完整才退回清洗版。
+      if (bits.length >= 4 && hasPalette) labelled = bits.join('; ') + '.'
+    } catch { /* 解析失败 → 兜底清洗 */ }
+    const clean = raw
+      .replace(/["[\]{}]/g, ' ')                       // 先去引号/括号，否则 `"walls":` 里的键名删不掉
+      .replace(/\s+/g, ' ')
+      .replace(/\b(setting|walls|floor|fixtures|light|palette)\b\s*:/gi, ' ')
+      .replace(/\s*,\s*/g, ', ')
+      .replace(/^[\s,;]+|[\s,;.]+$/g, '')
+    return labelled || (clean ? clean + '.' : '')
+  }
+  try {
+    let r = await call().catch(() => null)
+    if (!r) r = await call().catch(() => null)      // 翻译偶发超时：重试一次再判失败
+    if (!r) throw new Error('translate-empty')
+    let en = String(r || '').replace(/\s+/g, ' ').trim()
+    if (compact) {
+      // 2026-10-25 改：原来六个字段用逗号拍平（"indoor, glass curtain wall, polished marble, …"），
+      // 读不成句、光的来源与色温被摊成关键词。现在每个字段带标签成句，光的灯/方向/色调都保住。
+      en = cleanScene(r)
+      // 🔴 场景太笼统 = 背景不锁：实测同一段中文一次翻 351 字符（含装饰条纹/地面纹理/拱门/糖果色）
+      //    → 背景锁住一半；另一次翻 230 字符笼统版 → 背景整块回源片。词数不够就再要一次，取更具体的。
+      // 🔴 2026-10-30：词数够也不一定合格 —— 实测某次返回把场景卡里的「远处模糊的城市建筑轮廓」
+      //   忠实译成 `walls: distant urban building outlines`（H3 会画成画面上方一团灰蓝块），
+      //    还出现 `light` 项残成 `tural daylight from upper side`。指令写了禁词也挡不住模型不听话，
+      //    所以这里做**出口验收**：缺 palette 或命中禁词都算不合格，重译一次。
+      const SCENE_BAD = /\b(distant|blurr\w*|out[- ]of[- ]focus|soft[- ]focus|bokeh|depth[- ]of[- ]field|breeze|wind|draft|gust|mist|haze|fog|dust|atmospher\w*|vignette|glow)\b/i
+      const sceneOk = (x: string) => /\bpalette\s*:/.test(x) && !SCENE_BAD.test(x)
+      if (t.length >= 100 && (!sceneOk(en) || en.split(/\s+/).length < 40)) {
+        const r2 = await call().catch(() => null)
+        if (r2) {
+          const en2 = cleanScene(r2)
+          // 先比合格（干净且带 palette 优先），同级再比词数（更具体）。
+          const q1 = (sceneOk(en) ? 2 : 0) + (/\bpalette\s*:/.test(en) ? 1 : 0)
+          const q2 = (sceneOk(en2) ? 2 : 0) + (/\bpalette\s*:/.test(en2) ? 1 : 0)
+          const w1 = en.split(/\s+/).length
+          const w2 = en2.split(/\s+/).length
+          if (q2 > q1 || (q2 === q1 && w2 > w1)) en = en2
+        }
+      }
+    }
+    // who/outfit：模型偶尔只译半句（实测 2026-10-25：208 字中文 appearance → 137 字符英文，
+    // 眼睛/鼻梁/唇形/头发/肤色/身形全丢）→ 太短就再要一次（只多一次文本调用），仍短就接受。
+    if (!compact && t.length >= 80 && en.length < t.length * 0.8) {
+      const r2 = await call().catch(() => null)
+      const en2 = String(r2 || '').replace(/\s+/g, ' ').trim()
+      if (en2.length > en.length) en = en2
+    }
+    if (en && !/[\u4e00-\u9fa5]/.test(en)) {
+      _enCache.set(ck, en)
+      // 场景版太笼统（<40 词）不落盘：否则一次翻车就被永久固定，下次连重试机会都没有
+      if (!compact || en.split(/\s+/).length >= 40) enDiskWrite(ck, en)
+      return en
+    }
+    throw new Error('translate-not-english')
+  } catch (e: any) {
+    // 🔴 绝不再把中文原样返回：H3 收到中文描述会完全压不住背景（实测段2 的 who 是中文
+    //    → 第 13 秒起源片背景整片回魂）。宁可让这一段的提交失败并提示重试，也不静默降级。
+    throw new Error(`提示词翻译失败（${e?.message || 'unknown'}）—— 点「全部重写」重试这一段`)
+  }
+}
+
+/**
+ * 舞步描述专用翻译：不能复用 toEnglish 的 _TR_FULL —— 那条指令明确要求
+ * 「跳过表演/表情/肢体动作描述」，正好会把这句要的舞步全删掉。
+ * 失败返回 ''（宁可不写，也不让中文混进 H3 提示词）。
+ */
+/** 最近一次舞步翻译失败的原因（给接口响应带出去，不再静默丢句） */
+let danceActionError = ''
+
+const _TR_DANCE = 'Translate one dance move into concise, concrete English. '
+  + 'The input is one line: the seconds that move occupies inside the clip, then a Chinese description. '
+  + 'A move that fills most of the clip gets more detail (up to 30 words); a move that only clips the edge gets one short clause (about 8 words). '
+  + 'Keep every movement of a body part — feet, legs, knees, hips, torso, arms, hands, head — including stepping, standing still at the end of a move, turning and shifting weight. Only mood, appearance and smile words may be dropped. '
+  + 'A description of where the feet or the body end up is part of the move. '
+  // 🔴 2026-10-28 通用规则：H3 是 cfg=1、没有负向分支，负向/缺失式描写等于把那个词喂给模型
+  //    （实测「蜷缩在地、黑暗里」翻成 `in darkness` 后，画面按"黑"去理解，反而丢掉背景与光）。
+  //    舞步只描述**画面里有的**身体动作与方位；光暗、缺失、否定一律不写。
+  + 'Describe only what is VISIBLE: body parts, positions and directions. Never write about light, darkness, ' +
+  'shadow, emptiness or anything that is absent, and never write a negation (no / not / without / none). '
+  + 'Output one clause of at most 30 words: no number, no seconds, no timestamp prefix, no Chinese.'
+/** 剔掉礼节性头部动作（颔首/点头/致意/鞠躬）+ 不点名会诱发特写的部位。
+ *  🔴 2026-10-27 实测根因（段4，稳定复现的 3~5s 大脸）：
+ *  ① 段4 是四段里唯一动作句带 `nodding slightly` 的 → 要表现点头只能给到脸。
+ *  ② `clap at her chest` 里的 chest 把注意力上移到上半身；`still stance` 把"站定"说成"姿态静止"
+ *     → 模型收到"这段不动"，用特写填画面。段1 同为站定但有"摇摆肩膀"的动作托着，所以没出问题。
+ *  处理：头部礼节动作直接删；chest/breast → in front of her body（动作照做、不点名胸口）；
+ *  still stance / still position → 去掉 still 修饰（站定照做，不说"姿态静止"）。*/
+export function stripHeadActions(text: string): string {
+  return String(text || '')
+    .replace(/[ \t]+/g, ' ')
+    .replace(/[，、；;,]?\s*(微微?颔首|轻轻?点头|颔首|点头|致意|鞠躬)/g, '')
+    .replace(/\n{2,}/g, '\n')
+    .trim()
+}
+
+/** 英文动作句落盘前的最后一道清洗：不点名胸口、不强调"静止姿态"、不带时间戳、不写光暗/缺失。
+ *  2026-10-28：这三类是通用的「负向/元信息」污染，跟具体素材无关 ——
+ *  ① `6s: …` 秒数前缀（LLM 把输入里的时间戳照抄进来）；
+ *  ② `in darkness / in the dark`（写"黑暗"=把黑暗喂给模型，画面按黑理解、背景光丢失）；
+ *  ③ `none mentioned / not mentioned / n/a`（缺失占位，模型会把占位当描述）。 */
+export function scrubDanceActionEn(en: string): string {
+  return String(en || '')
+    .replace(/\b(?:at|in|on|to|of|in\s+front\s+of)\s+(?:her|the)\s+chest(?:-level|level)?\b/gi, 'in front of her body')
+    .replace(/\b(?:at|to|on|in)\s+chest\b/gi, 'in front of her body')
+    .replace(/\bchest[- ]level\b/gi, 'in front of her body')
+    .replace(/\b(?:to\s+a\s+|in\s+a\s+|into\s+a\s+)?still\s+(stance|position|pose)\b/gi, 'to a $1')
+    .replace(/\b(?:and\s+)?stands?\s+still\s+at\s+the\s+(?:end|close)\b/gi, 'closes the move')
+    .replace(/(^|[;]\s*)\d+(?:\.\d+)?\s*s\s*:\s*/gi, '$1')          // 秒数前缀
+    .replace(/\b(?:in|within)\s+(?:complete\s+|total\s+|pitch[- ])?(?:darkness|the\s+dark)\b/gi, '')  // 光暗
+    .replace(/\b(?:none|not)\s+mentioned\b/gi, '')
+    .replace(/\bn\/?a\b/gi, '')
+    .replace(/\s{2,}/g, ' ')
+    .replace(/[;,]\s*;/g, ';').trim()
+}
+async function translateDanceAction(text: string, configId?: number | null): Promise<string> {
+  // 🔴 2026-10-26：这里原来用 /\s+/g 把换行也压掉了 —— 动作句输入是多行（每条一行「N.Ns: …」），
+  //    压成一行后模型看不出有几条，实测段1 丢「起势」、段3 丢「侧身延伸」。只压行内空白。
+  // 🔴 2026-10-27：`微微颔首`（nod）这类礼节性头部动作不能进英文动作句 ——
+  //    实测段4 是四段里唯一带 `nodding slightly` 的，也是唯一出大脸特写的（段1/2/3 动作句零头部词）。
+  //    要表现"点头"模型只能把镜头给到脸。这里先剔掉，不影响"站定/拍手/并步"。
+  const t = String(text || '')
+    .replace(/[ \t]+/g, ' ')
+    .replace(/[，、；;,]?\s*(微微?颔首|轻轻?点头|颔首|点头|致意|鞠躬)/g, '')
+    .replace(/\n{2,}/g, '\n').trim()
+  if (!t) return ''
+  if (!/[\u4e00-\u9fa5]/.test(t)) return t
+  const ck = 'D|' + t
+  const hit = _enCache.get(ck)
+  if (hit) return hit
+  // 🔴 2026-10-26：四段一起点重编 = 20 次 LLM 调用并发打到同一台文本模型，
+  //    而 action 是每段最后一次调用、最容易超时 —— 失败原来是静默返回 '',
+  //    结果四段提示词整段没有动作句（实测 00:24 那批 4 段全是 6821 字符、无 moves 句），
+  //    生成出来后 260 字符处之后模型自己编。改成重试 3 次并把失败暴露到接口响应里。
+  // 🔴 2026-10-26：实测翻译会静默丢条（段1 丢「起势」、段3 丢「侧身延伸」），
+  //    250 字符根本够（三条压完约 145），是模型偷懒。按输入条数校验，不匹配就重试。
+  const expect = t.split('\n').filter((x) => x.trim()).length
+  // 🔴 2026-10-26：整段一起翻救不回来 —— 实测这个 flash 模型会把两条合并成一条（段1/段2/段4 全丢）、
+  //    把一条切成三条（段4 回 6 段）、还会删条目；「数 ;」和「按编号对号」两种校验都被它绕过。
+  //    改成每条单独翻一次并发跑：条数由输入决定，物理上不可能丢条或合并。
+  const rows = t.split('\n').map((x) => x.trim()).filter(Boolean)
+  // 串行：并发 2~3 个请求打同一中转会被限流（实测最后一条必失败 → 动作句少一条），
+  // 单段最多 3 条、串行只多花 2~3 秒，换稳定。
+  const outfits: string[] = []
+  const outs: string[] = []
+  for (const line of rows) {
+    try {
+      const raw = String((await askText(_TR_DANCE, line, 220, configId)) || '')
+      outfits.push(raw)
+      outs.push(raw)
+    } catch (e: any) {
+      danceActionError = `舞步翻译失败：${String(e?.message || e || '').slice(0, 120)}`
+      console.error('[dance-tr]', danceActionError, '| input:', line.slice(0, 40))
+      outfits.push('')
+      outs.push('')
+    }
+  }
+  if (process.env.DANCE_TR_DEBUG) console.error('[dance-tr-raw]', JSON.stringify(outfits))
+  const cl = outs.map((o) => String(o || '')
+    .replace(/^\s*(?:\d{1,2}\s*[).:]|[-•*])\s*/gm, '')
+    .replace(/[;,\s]+$/, '').replace(/\s+/g, ' ').trim()).filter(Boolean)
+  if (cl.length < rows.length) {
+    danceActionError = danceActionError || `舞步翻译缺口（${rows.length} 条只回了 ${cl.length} 条）`
+    if (!cl.length) return ''
+  }
+  // 🔴 2026-10-27：落盘前过最后一道清洗 —— chest → in front of her body、去掉 still stance。
+  //    实测段4 稳定复现的 3~5s 大脸就出在 `clap at her chest ... to a still stance` 这句上。
+  const r: string | null = cl.length ? scrubDanceActionEn(cl.join('; ')) : null
+  let en = String(r || '').replace(/\s+/g, ' ')
+    .replace(/[.;,]\s*;\s*/g, '; ')          // 模型爱写「beat. ; She…」→ 清成「beat; She…」
+    .replace(/;/g, '; ').replace(/\s+/g, ' ')
+    .replace(/^["“]\s*|\s*["”]$/g, '').trim()
+  if (!en || /[\u4e00-\u9fa5]/.test(en)) return ''
+  // 🔴 2026-10-26：删掉原来的「末尾没标点就回退到最后一个 . 或 ;」保护。
+  //    它是为「整段翻一次、可能被 max_tokens 截半句」设计的；改成逐条翻译后每条本身完整，
+  //    拼起来末尾没标点就一路回退到第 1 条末尾的 `;`，把后面所有条目整条切掉
+  //    （实测段1/段2/段4 都只活下第 1 条）。每条已在 askText 层由 finish_reason 保证完整。
+  if (!en) {
+    danceActionError = danceActionError || '舞步翻译返回空（模型超时或输出含中文）'
+    return ''
+  }
+  danceActionError = ''
+  _enCache.set(ck, en)
+  return en
+}
+
+/** 编译舞蹈英文提示词：先把中文资产描述译成英文，再交给模板 */
+async function compileDancePromptEn(p: {
+  characterPrompt?: string; outfit?: string; scenePrompt?: string; style?: string; styleHead?: string
+  frames: number; shotNo: number; totalShots: number; configId?: number | null
+  scenePic?: number      // 场景图在 <Picture N> 里的序号（1 起），默认 2
+  actionZh?: string      // 本段中文舞步（来自 outline），翻成英文点名进 dd
+  force?: boolean          // true = 强制重新翻译（勾了「重新生成」时）
+}): Promise<string> {
+  // 串行翻译（原来是 Promise.all 三并发 —— 并发撞超时时会有一段失败，
+  // 而失败的翻译以前会静默返回中文，导致段1 英文 / 段2 中文，背景直接失守）。
+  const who = await toEnglish(p.characterPrompt, p.configId, false, p.force)
+  const outfit = await toEnglish(p.outfit, p.configId, false, p.force)
+  // 🔴 2026-10-27（段4 结尾"背景上隐约两次人脸"）：场景卡里那句
+  //    `full-height frameless floor-to-ceiling mirror wall reflecting dancers` ——
+  //    dancers 是复数、泛指，模型据此在镜面背景里浮出陌生人的脸。
+  //    渲染时把"反射舞者/人"这类泛指改写成"反射房间"（不动用户在场景卡里填的原文）。
+  const sceneRaw = await toEnglish(p.scenePrompt, p.configId, true, p.force)
+  // 场景清洗统一走 scrubSceneEn（缺失占位/否定小句/「反射舞者」泛指都在那里处理）
+  const scene = scrubSceneEn(sceneRaw)
+  // 2026-10-28（用户拍板 A）：不再把大纲里的动作翻成英文塞进提示词 —— 动作由 <Video 1> 提供，
+  // per-段动作句是猜的、写偏就与源片打架。这里省掉一次 LLM 调用；translateDanceAction 保留不删，恢复只需
+  // 把下面这行改回 `await translateDanceAction(...)`。`action` 仍传空串给 compileDancePrompt（模板不再输出它）。
+  const action = ''
+  return compileDancePrompt({ ...p, characterPrompt: who, outfit, scenePrompt: scene, action })
+}
+
 function compileDancePromptZh(p: { frames: number; shotNo: number; totalShots: number }): string {
   const end = ((Number(p.frames) || 124) / 24).toFixed(2)
   return [
@@ -1379,40 +2293,380 @@ function compileDancePromptZh(p: { frames: number; shotNo: number; totalShots: n
   ].join('\n')
 }
 
-function compileDancePrompt(p: { characterPrompt?: string; scenePrompt?: string; style?: string; frames: number; shotNo: number; totalShots: number }): string {
-  const who = String(p.characterPrompt || '').replace(/\s+/g, ' ').trim()
-    || 'a young woman, short black chin-length hair parted to one side, calm steady gaze'
-  const scene = String(p.scenePrompt || '').replace(/\s+/g, ' ').trim()
-    || 'a clean outdoor location with even overcast daylight'
+// 表演/表情/动作类描述不能进 who 段：H3 会照着演。
+// 实测（2026-10-24）人物资产里带「at the close she tilts her head with a sweet smile, chest rising...」，
+// 段2 后半段模型就去演这个动作，脱离源片舞步、人物直接脱锁。这类是镜头表演，不属于「她长什么样」。
+// 只禁**会诱导动作**的词。🔴 2026-10-30 修正：上一轮把 gaze / calm / quiet / serene / stillness
+// 这些**静态气质**词也塞进来了 —— 结果 `gaze steady and calm like a still deep pool`、
+// `a stillness that holds feeling inward` 这类描述人物神态的句子被整句删掉，人物段只剩
+// 虹膜颜色+肤色+发型，人物的"气质锚点"没了，实测段1 出大脸、后段人脸不稳定。
+// 静态气质 = 长什么样的延伸，必须留；会变成动作的才删。
+const PERFORM_RE = /\b(smil\w*|tilt\w*|breath\w*|post-effort|aura|livel\w*|glanc\w*|wink\w*|blink\w*|laugh\w*|frown\w*|pout\w*|nod\w*|sing\w*|hum\w*|grin\w*|when movements|at the close|at the end|throughout the take|gradually (?:opens|widens|turns)|slowly (?:opens|widens|turns))\b/i
+
+/** 只留静态外貌句：按句切分，丢掉含表演/表情词的句子；全被丢光就退回原文 */
+function staticAppearance(text: string): string {
+  const t = String(text || '').replace(/\s+/g, ' ').trim()
+  if (!t) return ''
+  const parts = t.split(/(?<=[.!?;])\s+/).filter(Boolean)
+  const kept = parts.filter((x) => !PERFORM_RE.test(x))
+  return (kept.length ? kept.join(' ') : t).trim()
+}
+
+/** 人物段的输入：脸/身材取资产 appearance —— 服装由 outfit 单独一句写，别在 who 里再写一遍（白占 ~450 字符且出现重复句号） */
+// 2026-10-26：**不过滤五官**。用户确认五官/肤色/妆造的颜色描述是画面色温的锚点，
+// 删掉之后画面从 R/B 1.16 漂到 1.42（明显发黄）。特写的真因是「参考图描述」把那张拼图
+// 当成可复现的画面（见 <Subject 1> 段），五官内容本身没问题。
+function danceWhoText(project: any, asset: any): string {
+  return String(asset?.appearance || project?.characterPrompt || asset?.description || '').trim()
+}
+
+/** 舞蹈提示词里的否定短语检测（纯函数，自检脚本用）。
+ *  🔴 2026-10-26 用户口径：H3 是 BasicGuider + cfg=1，**没有负向分支** —— 否定句不扣分，
+ *  只是把被否定的那个词喂给正向描述。官方 base-en.txt / ref-en.txt 的示例提示词里
+ *  一句否定句都没有：机位不动写 `The camera holds a static shot`，嘴不动写
+ *  `while his lips remain completely closed`，没有音乐写 `N/A`。
+ *  所以我们原来那三句 `Framing is locked: no close-up, no facial shot` /
+ *  `no added pan, no tilt, no zoom and no push in` / `must not change`
+ *  实际效果是往提示词里塞了 close-up、facial shot、pan、tilt、zoom、push in 这些词。
+ *  只查「否定词 + 名词/运镜词」——动作动词那套由 services/video-prompts.ts 的 findNegatedAction 管。
+ *  例外：`N/A` 字段值与画风头 `avoid …` 是官方写法，不算。 */
+const DANCE_NEG_OK = /\b(?:N\/A)\b|\bavoid [a-z][a-z-]*(?: [a-z][a-z-]*)?/gi
+const DANCE_NEG_BAD = /\b(?:no|not|never|without|must not|do not|does not)\s+(?:[a-z'-]+\s+){0,2}?(?:close-?ups?|facial shots?|pan|tilt|zoom|push[\s-]?in|dolly|truck|changes?|changing|added|extra|subtitles?|captions?)\b/gi
+// 2026-10-28 通用：缺失占位 / 光暗描写也属「非正向写法」——`none mentioned` 等于写了那个名词，
+// `in darkness` 等于把黑暗喂给模型。这两类以前会漏检（只核机位那 12 个词）。
+const DANCE_NEG_META = /\b(?:(?:none|not)\s+mentioned|in\s+(?:complete\s+|total\s+|pitch[- ])?(?:darkness|the\s+dark)|n\/a)\b/gi
+export function findDanceNegations(en: string): string[] {
+  const body = String(en || '').replace(DANCE_NEG_OK, ' ')
+  const hits = [...(body.match(DANCE_NEG_BAD) || []), ...(body.match(DANCE_NEG_META) || [])]
+    .map((x) => x.trim().replace(/\s+/g, ' ').toLowerCase())
+  return [...new Set(hits)]
+}
+
+/** 只留「颜色 / 发型 / 体型」这类可锁锚点；纯形状级细描（额头、双眼皮、鼻梁、唇形、脸型）对身份锁定没有增量，
+ *  却吃掉 600+ 字符（2026-10-28 实测：真实稿 <Subject 1> 2873 字符 = 全提示词的 41%）。
+ *  ⚠️ 颜色类一律保留：10-26 实测删掉颜色锚点后画面发黄（R/B 1.16 → 1.42）。
+ *  ⚠️ 必须按**短语**判，不能按句：同一段资产两次翻译的分句不一样（一次把形状和颜色拆成两句、
+ *     一次写成「Soft oval face shape, …, deep-brown almost black irises, …」一整句），
+ *     句子级过滤在后者上会整句保留 → 又长回 1450 字符（2026-10-28 实测到的坑）。 */
+const SHAPE_RE = /\b(foreheads?|eyelids?|eyes?|brows?|eyebrows?|noses?|nostrils?|bridge|lips?|mouth[- ]corners?|corners? of the mouth|ovals?|cheekbones?|jawlines?|chins?|pupils?)\b/i
+const COLOUR_RE = /\b(black|brown|white|grey|gray|pink|red|blue|green|yellow|purple|orange|beige|fair|pale|tan|olive|dark|light|cool|warm|skin|hair|tone|undertone|cm|tall)\b/i
+/** 删句后接缝处会出现「. pupils」这种小写开头，统一把句首字母大写（分号后不动 —— 英文分号后本来就小写）。 */
+const fixSentenceStart = (t: string) => t.replace(/([.!?]\s+)([a-z])/g, (_m, a: string, b: string) => a + b.toUpperCase())
+
+export function trimShapeDetail(text: string): string {
+  const t = String(text || '').replace(/\s+/g, ' ').trim()
+  if (!t) return t
+  // 连标点一起切（保留句末标点），否则删掉一句后前后会粘成一句
+  const parts = t.match(/[^.!?;]+[.!?;]*/g) || [t]
+  const trimmed = parts.map((raw) => {
+    const body = raw.trim().replace(/[.!?;]+$/, '')
+    const punc = raw.trim().slice(body.length) || '.'
+    if (!body || !SHAPE_RE.test(body)) return body ? body + punc : ''
+    // 整句都在讲形状 → 整句删；形状与颜色混在一句 → 只删形状短语，颜色短语留着
+    if (!COLOUR_RE.test(body)) return ''
+    const kept = body.split(/,\s*/).filter((phrase) => !(SHAPE_RE.test(phrase) && !COLOUR_RE.test(phrase))).join(', ')
+    return kept ? kept + punc : ''
+  }).filter(Boolean).join(' ')
+  return fixSentenceStart(trimmed || t)
+}
+
+/** 妆造/指甲/首饰这类句子从服装描述里剔掉：脸和妆容由身份卡 + <Picture 1> 决定，写进提示词既不锁人也白占字符。
+ *  2026-10-28：原正则只有 `nails?`，实测漏掉 `Fingernails are trimmed short…`（一个词、且前面没词边界）→ 补 finger/toe nail。 */
+const MAKEUP_RE = /\b(make-?up|foundation|eyeliner|eyebrows?|lip (?:tint|gloss|stick|balm)|lipstick|blush|nail polish|(?:finger|toe)?nails?|earrings?|necklaces?|bracelets?|jewell?ery|jewelry)\b/i
+export function trimMakeup(text: string): string {
+  const t = String(text || '').replace(/\s+/g, ' ').trim()
+  if (!t) return t
+  const parts = t.split(/(?<=[.!?;])\s+/).filter(Boolean)
+  const kept = parts.filter((s) => !MAKEUP_RE.test(s))
+  return fixSentenceStart((kept.length ? kept.join(' ') : t).trim())
+}
+
+/** 场景文本的唯一清洗入口（编译期、纯函数，便于自检）：把「缺失/否定」写法从场景里剔干净。
+ *  H3 是 cfg=1、没有负向分支 —— 写 `walls: none mentioned` 或 `no close vertical walls` 等于正面写了那个名词。
+ *  三类实测过的写法：① 项首 `walls: none/not mentioned|n/a`；② 项首 `walls: no …`；③ 中间夹 `, no …` 小句。 */
+export function scrubSceneEn(scene: string): string {
+  const cleaned = String(scene || '')
+    .replace(/\breflecting\s+(?:the\s+)?(?:dancers?|people|persons?|dancers?\s+and\s+\w+|others|figures?)\b/gi, 'reflecting the room')
+    // 🔴 2026-10-30：H3 会把摄影/天气/氛围词真的画出来 —— 实测 `distant blurred city building
+    //   outlines` 成了画面上方一团灰蓝模糊块，`soft breeze` 让画面整体发飘。这里是编译期第二道闸：
+    //   就算翻译模型没听指令编了，也要在进提示词前删掉。`distant blurred …` 整段删（只删 blurred 会留下悬空的 distant）。
+    .replace(/\b(?:distant\s+)?(?:blurred|blurry|out[- ]of[- ]focus|soft[- ]focus|bokeh|depth[- ]of[- ]field)\b[^,;.]*/gi, '')
+    // 🔴 2026-10-30：`distant` 裸词也要删。实测场景卡中文「远处模糊的城市建筑轮廓」有一次被译成
+    //   `distant urban building outlines`（没带 blurred）→ 上面那条不匹配 → 留着被画成画面上方远景块。
+    .replace(/\bdistant\b[^,;.]*/gi, '')
+    // 🔴 2026-10-30：远景建筑轮廓同理 —— 场景卡「远处模糊的城市建筑轮廓」会被译成
+    //   `city building silhouettes bounding the view`，实测画到画面上方成灰蓝团。
+    .replace(/\b(?:city\s+)?building\s+(?:outlines?|silhouettes?)\b[^,;.]*/gi, '')
+    .replace(/\b(?:soft\s+)?(?:breeze|wind|draft|gust)\b[^,;.]*/gi, '')
+    .replace(/\b(?:light\s+)?(?:haze|mist|fog|dust|atmospher\w*|vignette|glow)\b[^,;.]*/gi, '')
+    .replace(/\b(?:setting|walls?|floor|fixtures?|light|lighting|palette|props?|furniture)\s*:\s*(?:none|not)\s+mentioned\s*[,;]?\s*/gi, '')
+    // 🔴 2026-10-30 抓到的真凶：`n\/?a` 少了词边界，`/` 又可选 ⇒ 等价于 `na`，
+    //   会把 `light: natural daylight …` 吃成 `tural daylight …`（连续两版提示词都断在这里）。
+    //   加 `\b` 后只有独立的 `n/a` / `na` 才被当成「未提及」删掉。
+    .replace(/\b(?:setting|walls?|floor|fixtures?|light|lighting|palette|props?|furniture)\s*:\s*n\/?a\b\s*[,;]?\s*/gi, '')
+    .replace(/\b(?:setting|walls?|floor|fixtures?|light|lighting|palette|props?|furniture)\s*:\s*(?:no|without|none)\b[^,;.]*[,;]?\s*/gi, '')
+    // 🔴 2026-10-30：删完禁词会留下空标签（`walls: ;`）—— 空标签等于正面写了「墙＝空」，
+    //   和 `walls: none mentioned` 同类毛病。这里连标签一起删，再收拾残留分隔符。
+    .replace(/\b(?:setting|walls?|floor|fixtures?|light|lighting|palette|props?|furniture)\s*:\s*(?=[;,]|\.|$)/gi, '')
+    .replace(/\s*;\s*;/g, '; ')
+    .replace(/\s*[,;]?\s*\b(?:no|without)\s+[^,;.]{1,60}(?=[,;.]|$)/gi, '')
+    .replace(/\s{2,}/g, ' ')
+  // 2026-10-28：同一项里重复出现的短语去掉（实测 LLM 翻译把
+  // `wide open dance-area stone paving in mid-ground` 在同一行贴了两遍，白占 50+ 字符）
+  return cleaned.split(/;\s*/).map((seg) => {
+    const seen = new Set<string>()
+    return seg.split(/,\s*/).filter((phrase) => {
+      const key = phrase.trim().toLowerCase()
+      if (!key) return false
+      if (seen.has(key)) return false
+      seen.add(key)
+      return true
+    }).join(', ')
+  }).join('; ')
+}
+
+function compileDancePrompt(p: { characterPrompt?: string; outfit?: string; scenePrompt?: string; style?: string; styleHead?: string; frames: number; shotNo: number; totalShots: number; scenePic?: number; action?: string }): string {
+  // 场景图序号：dance 的参考图固定是「人物图 → 场景图」，但用户可以在分镜里手绑顺序，
+  // 所以由调用侧按实际顺序传进来，别在模板里写死 2。
+  const sp = Math.max(1, Math.floor(Number(p.scenePic) || 2))
+  // 本段舞步（英文，已翻译）；空串时模板里那句整条不出现。
+  // 限 260 字符：真实素材已占 6700+，留给舞步的预算有限。
+  // 🔴 2026-10-25 修：原来按词边界硬切，实测切出残句「The female lead executes a series of fast.」
+  //    —— 半句话会被模型当指令，后段直接跑飞。现在切到最后一个句号/分号，切不出整句就整条不用。
+  // 🔴 2026-10-26 实测（段2 在 4s 出大脸，段1 正常）：LLM 写出的舞步是**编号列表**
+  //    （1. … 2. … 3. …），而 260 字符预算只装得下第 1 条。第 1 条是"开场姿势"，
+  //    后面的条目被整条丢掉 ⇒ 6.58 秒里只有开头有动作，从第 4 秒起模型没动作可依就自己编，编成一张大脸。
+  //    修法两条：① 先剥掉 `1.` `2.` 这类编号（对模型无意义还吃预算）
+  //              ② 超长时按「首 / 中 / 尾」均匀抽样句组，而不是只留最前面那几句
+  const action = (() => {
+    // ① 先剥掉 `1.` `2.` 编号（对模型无意义还吃预算）
+    const t = String(p.action || '').replace(/\s+/g, ' ').replace(/^(?:\d+[.)]\s*)+/, '').replace(/[.\s]+$/, '').trim()
+    if (t.length <= 260) return t
+    const parts = t.split(/(?<=[.;])\s+/).map((x) => x.trim()).filter(Boolean)
+    // ② 只有 1~2 句还超长：切到最后一个完整句；切不出整句就整条不用（不许出残句）
+    if (parts.length <= 2) {
+      const m = t.slice(0, 260).match(/^[\s\S]*[.;]/)
+      return m ? m[0].replace(/[\s,;.]+$/, '').trim() : ''
+    }
+    // ③ 句组很多：优先保「首 + 尾」，有余量再补「中」。
+    //    顺序刻意不按时间 —— 丢的必须是中间那条：原来只留最前面几句 ⇒ 6.58 秒里只有开头
+    //    有动作，从第 4 秒起模型自己编，编成一张大脸；只保首+中同样会把最靠后那段丢掉。
+    const pick = [parts[0], parts[parts.length - 1], parts[Math.floor(parts.length / 2)]]
+    let out = ''
+    for (const seg of pick) {
+      const cand = out ? `${out} ${seg}` : seg
+      if (cand.length > 260) break
+      out = cand
+    }
+    if (!out) {
+      const m = t.slice(0, 260).match(/^[\s\S]*[.;]/)
+      out = m ? m[0] : ''
+    }
+    return out.replace(/[\s,;.]+$/, '').trim()
+  })()
+  // 🔴 2026-10-26 实测（1310 验收版 vs 1330 出大脸版逐句 diff）：
+  //   同一份中文资产，翻译出来的 who 描述 908 字符时段1 没大脸；1271 字符（多了独立成句的
+  //   「Her nose bridge…」「Her lips are…」「the mouth corners…」）时两次都从第 1 帧就是脸部特写。
+  //   解剖细节一旦拆成整句，模型就把它们当成「要拍这些部位」的镜头指令。
+  //   所以这里只删**形状级细描**（鼻/唇/嘴/嘴角/下巴），颜色类（瞳色/肤色/眉色）全部保留 ——
+  //   那些是色温锚点，删了画面发黄（实测 R/B 1.16 → 1.42）。
+  const who = trimShapeDetail((staticAppearance(String(p.characterPrompt || ''))
+    // 2026-10-28：原来这里兜底写死「a young woman, short black chin-length hair…」——
+    // 换人物时（男/长发/儿童）会凭这句话另画一个人。兜底只指向参考图，不描述长相。
+    || 'the performer shown in <Picture 1>')
+    .replace(/(^|(?<=[.!?]\s))(?:Her|The) nose[^.]*\.\s*/gi, '$1')
+    .replace(/(^|(?<=[.!?]\s))(?:Her|The) lips?[^.]*\.\s*/gi, '$1')
+    .replace(/;?\s*when closed,? the mouth corners[^.;]*/gi, '')
+    .replace(/;?\s*the mouth corners[^.;]*/gi, '')
+    .replace(/;?\s*soft,? non-aggressive edges/gi, '')
+    .replace(/\.{2,}/g, '.').replace(/\s+([.;,])/g, '$1').replace(/[.\s]+$/, ''))
+  // 服装单独成句钉进提示词：只写「衣服来自 <Picture 1>」模型会每段自己重新理解一遍，
+  // 跨段必然漂移（实测段1/段2 换成两套衣服）。把角色资产的造型原文写进来才有硬约束。
+  // 🔴 2026-10-26：outfit 里混着妆造（Makeup: ... dark gray eyebrows ... eyeliner ... lips coated ...），
+  // 这些词会把注意力拽到脸上，实测提示词里出现就出特写。同样按句剔掉五官句，只留衣服和鞋。
+  // 🔴 2026-10-30：服装描述也要过 staticAppearance —— 它同样会混进表演句
+  //   （「裙摆随呼吸起伏」「转身时会轻轻飘起」这类），而 H3 会照着演。原来只有 who 段过滤。
+  const outfit = trimMakeup(staticAppearance(String(p.outfit || '').replace(/\s+/g, ' ').trim()))
+  // 🔴 2026-10-26 用户反馈「衣服不按参考图走」：原来是 `fixed by this description and must not
+  // change`，把文字描述钉成衣服的最高优先级 → 模型照文字重新画一套，参考图里那身衣服失效。
+  // 改成参考图为权威、文字只补细节（不得覆盖），两者冲突时以 <Picture 1> 为准。
+  const outfitLine = outfit
+    ? `The garment in <Picture 1> is authoritative for its cut, colour and fabric: reproduce that exact outfit. The board wins wherever the two differ; the following description adds detail: ${outfit}`
+    : 'Her outfit comes from <Picture 1> and stays the same in every frame.'
+  // 场景只取第一句：完整 description 有 236 字符，全塞进六段式会把动作描述挤到后面（实测段1 动作跟随从准变松）
+  const sceneFull = scrubSceneEn(String(p.scenePrompt || '').replace(/\s+/g, ' ').trim())
+  // 场景句：**整段都用**（不再只取第一句）。
+  // 2026-10-24 实测：译文有三句（「舞蹈室/木地板…」「白色墙面…」「自然光从左侧大窗射入…」），
+  // 老的「只取第一句」把后两句切掉了 —— 而那两句正是背景（墙+光）的核心信息，切掉就只能跟源片。
+  // 上限 740 字符：104 词 × 约 7 字符 ≈ 730，palette 在最后也必须活下来。
+  let sceneLine = sceneFull
+  if (sceneLine.length > 740) {
+    const cut = sceneLine.slice(0, 740)
+    const m2 = cut.match(/^[\s\S]*[,;.](\s|$)/)
+    sceneLine = (m2 ? m2[0] : cut).replace(/[\s,;.]+$/, '').trim()
+  }
+  // 单词数硬上限 104：LIMIT 之和（10 + 16×4 + 14 = 88 值词）+ 5 个标签 = 93，留 11 词余量。
+  const capWords = (t: string, n: number) => {
+    const w = t.split(/\s+/).filter(Boolean)
+    if (w.length <= n) return t
+    return w.slice(0, n).join(' ').replace(/[,;.\s]+$/, '')
+  }
+  sceneLine = capWords(sceneLine, 104)
+  const sceneOf = (line: string) => {
+    // 2026-10-28：兜底原来写死「a clean outdoor location with even overcast daylight」——
+    // 换室内/夜景背景时会凭空给一个户外阴天。场景为空就只指向场景参考图。
+    if (!line) return 'the location shown in the scene reference image'
+    // 统一去掉尾部所有点：模板里 `featuring ${scene}.` 会补一个，否则出现 `…trees..`（实测 2026-10-28）
+    return line.replace(/[.\s]+$/, '')
+  }
   const style = String(p.style || '').trim() || 'photoreal'
+  // 画风：优先用画风预设里的英文风格头（画风才真的跟得住），只留前 ~18 个词（官方 dd 350–500 词，其余句子已占满）。
+  // 预设查不到 / 是旧预设 → 退回原来那句「a <key> dance clip」。
+  const styleHeadRaw = String(p.styleHead || '').replace(/\s+/g, ' ').replace(/[.\s]+$/, '').trim()
+  const styleHead = (() => {
+    const w = styleHeadRaw.split(' ').filter(Boolean)
+    if (!w.length) return ''
+    const cut = w.length > 18 ? w.slice(0, 18).join(' ').replace(/[\s,;.]+$/, '') : styleHeadRaw
+    return cut.charAt(0).toUpperCase() + cut.slice(1)
+  })()
+  const styleLine = styleHead
+    ? `${styleHead}. The target video is a dance clip lit by the same lighting as <Subject ${sp}>.`
+    // 2026-10-28：兜底去掉 `, its light soft and even` —— 那是写死的光质，户外强光/夜景霓虹都跟它打架。
+    : `The target video is a ${style} dance clip lit by the same lighting as <Subject ${sp}>.`
   const secs = (p.frames / 24).toFixed(2)
   const part = `segment ${p.shotNo} of ${p.totalShots}`
-  return [
+  const build = (scene: string, whoNow = who) => [
     'subject_definitions:',
-    `<Subject 1> is the performer whose identity is locked by the identity card and whose body, outfit and styling come from <Picture 1>: ${who}. She has a complete head, a full face and her own hair in every frame — the reference board shows the outfit only, so the head comes from the identity card and from this description.`,
-    `<Video 1> is the source dance video for the target edit, providing the choreography, body motion, expression timing, subject positioning, camera framing, camera movement, perspective, pacing and temporal structure.`,
+    // 🔴 2026-10-26：这里**不能提"人像/肖像面板（portrait panel）"**。
+    // 实测：写成 "one portrait panel supplies likeness only" 之后，段1 开头的第一帧直接就是
+    // 参考图左侧那张大脸（用户实测反馈），而且衣服颜色也没锁住（服装约束被稀释）。
+    // 正确写法只有一句：只说"从这块板取服装的版型、颜色、布料"，一个字不提脸/头/肖像。
+    // 昨天那版写 "the reference board shows the outfit only" 时没这问题；4.0.334 写
+    // "take the garment's cut, colour and fabric from that board" 也没特写。
+    // 另外五官/肤色/妆造描述一个字都不删 —— 删了画面发黄（实测 R/B 1.16 → 1.42）。
+    // 官方 §2.1（双源句式）+ §2.3：可见内容（动作/表情/站位）必须归 <Subject N>，<Video N> 只承担
+    // 「整片结构源」。原来动作只写在 dd 里、Subject 定义只交代外观 → 属标签职责越界，现已按官方原文补上。
+    `<Subject 1> is the performer whose identity is locked by the identity card, whose body, outfit and styling come from <Picture 1>, and whose dance motion, body movement and positions in the frame come from <Video 1>: ${whoNow.replace(/[.;:,\s]+$/, '')}. ${outfitLine} She has a complete head and her own hair, both taken from the identity card — the reference board shows the outfit only, so the head follows that card and this description. <Picture 1> is a multi-panel wardrobe and identity board: its panels serve as clothing and facial reference only, they are not a shot list, and their crops, scales and camera distances are not to be reproduced. The video carries one framing only, the one <Video 1> gives, and she appears once in every frame at that size and distance, from the first frame to the last.`,
+    `<Subject ${sp}> is the environment in <Picture ${sp}>, featuring ${scene}.`,
+        // 🔴 2026-10-26 官方「编辑视频」口径（Runware API 文档 MiniMax H3 › Editing video）：
+    //    prompt 是「指令」而不是「描述」，且 Editing keeps whatever you do not mention ⇒
+    //    「最常见的失败是欠说明，必须把要保留的东西写进 keep 那一半」。
+    //    我们原来只写了它「提供什么」，没写「这些必须不变」⇒ 段2 第 4 秒起画面偏开源片
+    //    （成片 vs 源片同刻 SSIM 0.47 → 0.34 且一路不回来；源片那一刻是全身景）。
+    `<Video 1> is the source video for the target video edit, providing its camera framing, camera movement, cuts, pacing and temporal structure.`,
     `<Audio 1> is the synchronized audio track of <Video 1> and is reused as the complete final audio track.`,
     'summary:',
-    `[video editing + reference generation + audio reuse] The target video is an edited ${part} (${secs} seconds) of <Video 1>. The original performer is replaced throughout by <Subject 1>, whose identity comes from the identity card and whose body, outfit and styling come from <Picture 1>, while her motion and performance follows <Video 1>. The location is ${scene}.`,
+    `[video editing + reference generation + audio reuse] The target video is an edited ${part} (${secs} seconds) of <Video 1>. The original performer is replaced throughout by <Subject 1>, whose identity comes from the identity card and whose body, outfit and styling come from <Picture 1>, while her dance motion and performance follow <Video 1>.`,
     'retention_analysis:',
-    '<Subject 1> (appears in [Shot 1]): fully_preserved - identity from the identity card, body, outfit and styling from <Picture 1>, unchanged from the first frame to the last.',
-    '<Video 1> (appears in [Shot 1]): fully_preserved - choreography, body motion, expression timing, subject positioning, camera framing, camera movement and pacing are retained unchanged in every frame.',
-    '<Audio 1> (appears in [Shot 1]): fully_copy - the audio of <Audio 1> is reused unchanged as the complete final audio track.',
+    // 2026-10-28 瘦身：这五行原来 820 字符，句子级压缩到 ~560，信息不丢（标记值/标签/出现镜次全保留）。
+    '<Subject 1> (appears in [Shot 1]): fully_preserved - identity from the identity card; body, outfit and styling from <Picture 1>; motion as described below.',
+    // 🔴 2026-10-26：这里只钉墙/地/固定件的几何与材质，光源统一由场景卡给（写死「光也逐帧保留」会与场景卡打架）。
+    // 2026-10-28（用户指模板不该写死「地板/墙」——场景可能是草地、沙滩、舞台）：
+    //   改成「每个元素都按 <Picture N> 原位保留」，不点名任何具体构件类别。
+    `<Subject ${sp}> (appears in [Shot 1]): fully_preserved - every element of <Picture ${sp}> stays as it is, in the same place and at the same scale, under the light described in <Subject ${sp}>.`,
+    '<Video 1> (framing, cuts, pacing): fully_preserved - camera framing, camera movement, cuts, pacing and temporal structure kept as they are.',
+    'camera framing: fully_preserved - same framing, angle and distance to her body in every frame as <Video 1>.',
+    '<Audio 1> (appears in [Shot 1]): fully_copy - reused unchanged as the complete final audio track.',
     'detailed_description:',
-    `The target video is a ${style} dance clip in even overcast daylight with soft shadowless light.`,
-    `[Shot 1] A static medium-wide shot frames <Subject 1> from head to feet at the same distance, height and angle as <Video 1>, with ${scene} behind her.`,
-    `She wears exactly the outfit of <Picture 1>, and the fabric creases and folds move the way they move on the real garment.`,
-    `Throughout the whole take she performs the exact choreography of <Video 1>: her feet land on the same frames and on the same spots, her knees bend and straighten through the same amplitude, her hips travel the same path and distance, her torso turns and counter-turns at the same instants, her arms open and close through the same arcs at the same height, her wrists and hands reach the same positions relative to her body, her head follows the same directions, and her weight shifts from one leg to the other on the same frames, so every body position in every frame matches the corresponding frame of <Video 1>.`,
-    'The camera holds the framing of <Video 1> for the whole take with the same height, distance and background layout, at the same framing amplitude and the same static speed, so there is no added pan, no tilt, no zoom and no push in.',
-    'Her hair and loose cuffs swing with each direction change, her soft diffuse shadow slides across the ground under her shoes, and she keeps a calm steady expression throughout the take.',
-    'The light stays flat and shadowless for the whole take, the sky fills the same portion of the frame as in <Video 1>, and the background elements hold the same positions and the same scale in every frame, so the location reads as one continuous place.',
-    'Her silhouette matches <Video 1> frame for frame, the hem, pockets and rolled cuffs of the outfit keep their shape while she moves, the cloth wrap stays on the same wrist, and skin tones and fabric colours stay consistent with <Picture 1> from the first frame to the last.',
-    'The image stays clean and sharp, the limbs stay intact through the fast passages, the joints hold their shape at the extremes of each pose, and only <Subject 1> is present in the frame from beginning to end.',
+    // 🔴 2026-10-24 修：原来这里写死「even overcast daylight + soft shadowless light」（阴天日光），
+    //    跟场景卡的「even panel lighting from ceiling」（天花面板灯）互相打架 → 模型混出偏暖怪光，
+    //    地板高光被抹成一片片橙色波纹（用户看到「火焰一样的纹络」）。现在只要求「跟场景参考同一套灯、均匀不刺眼」，不写死光源类型。
+    styleLine,
+    // 2026-10-28：去掉写死的 `A static medium-wide shot … from head to feet`（机位/景别跟着源片走，
+    // 换横屏、半身、有运镜的源片时这句话会跟 <Video 1> 打架）。防大脸靠「取景与占比跟源片一致」。
+    // 官方 §5.2：风格句在 `[Shot 1]` 之前一到两句，正文由 `[Shot 1]` 起头（一段 = 一个镜头，无时间码）。
+    // 2026-10-28（用户报「段2 出特写，源片没有特写」）：身份段有 ~800 字符的脸部级细节（肤色/额头反光/鼻翼/锁骨），
+    //   模型会把「描述得这么细」当成「要拍脸」→ 自发生成特写。同款故障 10-27 在 p11 段1 出现过。
+    //   修法（照 p11 当时定的）：在 [Shot 1] 正面写死全程全身在框内（正向描述，不用禁词），并点明上面那些细节只管身份。
+    `[Shot 1] The shot frames <Subject 1> with the same framing, angle and distance as <Video 1> in every frame: her whole body stays inside the frame from head to feet from the first frame to the last, the framing holds wide enough for that and never tightens in on her. The details above describe her identity only.`,
+    // 场景句回到 dd（p6/p8 的有效位置）：实测 4.0.316~318 把场景搬进 <Subject 2> 定义后，
+    // 背景反而整块回到源片（舞蹈5 07:15 那条 6974 字符）。p6 那版背景生效时，场景就是写在这里。
+    `The location of the take is <Subject ${sp}>.`,
+    // 纯正向声明：H3 对否定句不敏感（否定会被当正向描述），所以只说"始终是同一个地方"，不提"不要跟源片"。
+    // 🔴 2026-10-25 回补（关键）：p6 那两版都有下面这两句，p8 起被删掉了 ——
+    //    「the background is that place」直指背景、「background elements hold the same positions and the same scale」
+    //    把背景元素的落位与尺度钉死。删掉之后背景就只能靠源片（实测 p8 锁一半、p10 整块回源片）。
+    `The background elements keep the same positions and scale in every frame.`,
+    // 🔴 2026-10-26 实测（段1 成片按 6×8=48 块量 R/B）：最黄的三块横坐标全是 0（画面最左 1/6），
+    //    纵向 gy=2..7，R/B 2.25~2.64（(88,62,34) 这种暖棕）—— 那一竖条正是场景卡里的落地镜面墙 +
+    //    黑色把杆。镜面是画面里唯一「不承载具体物体」的大块区域，只写 matching the saturation of
+    //    <Subject 2> 压不住它，模型自己在镜子里刷了一层暖色。这里把镜子反射的颜色钉到同房间。
+    `The colour grading stays neutral, matching the white balance and saturation of <Subject ${sp}>.`, 
+    // 🔴 2026-10-27（段4 结尾"背景上隐约两次人脸"）：场景卡里写的是 `mirror wall reflecting dancers`
+    //    —— dancers 是复数、泛指，等于告诉模型"镜子里可以出现别人"，于是背景镜面里浮出陌生人的脸。
+    //    这里把镜子钉死成"只有她自己这一份倒影"，正向写（H3 无负向分支，不能写 no other people）。
+    // 🔴 2026-10-28：这句只在**场景里真有镜墙**时才加。舞蹈7 的场景是户外广场（无镜墙、无浅色地板），
+    //    硬写这句 = 模型找不到镜面，只能拿源视频背景顶 → 段1 背景整块回源片、还带上源片的人脸痕迹。
+    /\bmirror\b/i.test(scene) ? `The mirror wall shows nothing but her own reflection, at the same size as her body, in the same light and over the surface of <Subject ${sp}>.` : '',
+    // 🔴 2026-10-26 实测：4.0.366 把这段清单压成两句、同时砍掉 LLM 动作句后，段1 火焰纹 + 大脸全回来了
+    //    ⇒ 这段逐项清单确实是有效约束（模型靠它维持肢体结构），别再当冗余删。
+    `Throughout the whole take she keeps dancing on the beat: her feet land on the beat and keep their spots, her knees bend and straighten through the same amplitude, her hips travel the same path and distance, her torso turns and counter-turns at the same instants, her arms open and close through the same arcs at the same height, her wrists and hands reach the same positions relative to her body, and her weight shifts from one leg to the other on the same beats. The amplitude of each move matches <Video 1> frame by frame, and whatever its size the whole body stays inside the frame at the same distance.`,
+    // 2026-10-25：点名本段具体舞步。官方 Ref 指南要求 dd 写清 actions and state changes；
+    // 只写「逐帧复刻」时动作跟随会松（社区实测：动作跟不住要 direct prompting）。
+    // 同帧/同幅度已由上面那句 choreography 声明，这里不再重复（省 100 字符给舞步本身）。
+    // 2026-10-28 用户拍板（A）：**删掉 per-段动作句**。它来自 `mv_projects.outline`（分镜大纲，LLM 写的），
+    // 不是从源片读出来的 —— 大纲写偏（这次「蜷在地上」「in darkness」）就跟 <Video 1> 打架。
+    // 动作由 <Video 1> 提供，模板里那段逐项肢体清单 + 「matches <Video 1> frame by frame」就是固定动作锁。
+    // 保留 action 入参与下方裁剪逻辑：要恢复只需把这一行加回来。
+    // 🔴 2026-10-25 回补（段2 后半段冒人脸特写的根因）：p6 两版都有下面这句的
+    //    「no added pan, no tilt, no zoom and no push in」，p8 起被换成弱版 ⇒ 模型在后段自由推近到脸。
+    // 2026-10-28：这两句原来分开（一句管机位、一句管距离/占比），合计 ~290 字符；本版加了官方的
+    // 「动作归属 + [Shot 1]」后总量顶到 6933/6980，第 4 段 6975 ⇒ 一涨就会触发压缩循环先砍 who
+    // （砍人物描述会掉脸锁）。合并成一句，信息不丢、省 ~120 字符。
+    'The camera holds the same height, distance and background layout as <Video 1> for the whole take, so she fills the same part of the frame in every frame as in <Video 1>. The words above name the picture and the motion; <Video 1> carries every frame at the same timecode, and her body keeps moving.',
+    // 同理：p6 说「keeps a calm steady expression」，p8 起改成「her face stays calm and steady」——
+    // 提示词里点名 face 会把注意力引到脸，正是特写的诱因。
+    // 🔴 2026-10-27 二次定位：段4 掉点区间帧间差 8.22（比全片均值 5.94 还高），
+    //    且 2.58s / 4.75s 各有一个 61 / 67 的硬切峰 ⇒ 不是「画面太静」，是模型自己切了个特写镜头。
+    //    所以这里要的是「一镜到底」的正向声明（H3 无负向分支，不能写 no cut）。
+    //    原来那句「减速时锁机位」实测两轮都没挡住，删掉换这句；净省 12 字符。
+    // 🔴 2026-10-27（用户要求：用正向提示词保证不写大脸）把那两句「距离恒定 + 占比恒定」合并进上面
+    //    那条机位句了（2026-10-28 减负），这里不再单独出一句 —— 防特写的作用不变：特写=距离变了。
+    // 🔴 2026-10-27：删掉 `Her hair and cuffs ... her expression stays calm.` 这句。
+    //    两个原因：① 点名 expression 会把注意力引到脸（和这次的大脸特写同源）；
+    //    ② 腾字符 —— 新增的「距离/占比恒定」那句比原来的「一镜到底」长 42 字符，
+    //    真实段4 数据会到 7015（超上限 35），必须让出来。
+    `She wears exactly the outfit of <Picture 1>, with the fabric creasing as the real garment does.`,
+    // 2026-10-25：删掉原 silhouette 句（hem/seams/jewellery 与上面 outfit 句重复，白占 240 字符）——
+    // 腾出的预算给舞步句（实测舞蹈5 段2 加了 260 字符舞步后只余 8 字符，必然触发压缩、先砍 who）。
+    'The limbs stay intact through fast passages and <Subject 1> is the only performer in frame.',
+    // 🔴 2026-10-26：删掉「The final frame shows the same full-body framing and distance as the first frame.」
+    //    实测（4.0.363 跑段1）：片头、片尾都出大脸，中间正常 —— 提示词里只在「首帧/末帧」两处反复强调构图一致
+    //    （retention 的 'from the first frame to the last'、镜头句的 'from the first frame to the last'、这句末帧回指），
+    //    模型就把这两处当成需要单独处理的位置、画成特写。改为全片口径后不再点名首尾。
     'overall_soundscape:',
-    'The complete audio of <Audio 1> is reused unchanged as the final audio track, including its music, its room tone and its ambient sound, with no added or regenerated sound.',
+    // 2026-10-26：模板层的最后一句否定句也改正面（用户口径：否定句模型听不懂，越写越反）。
+    'The complete audio of <Audio 1> is reused unchanged as the final audio track.',
     'non_diegetic_music:',
     'The complete music of <Audio 1> is reused unchanged and is the only music track in the target video.',
-  ].join('\n')
+  ].filter(Boolean).join('\n')
+
+  // H3 提示词硬上限 7000 字符（用户 2026-10-24 指出；实测整段场景句版本会到 7071 —— 已超）。
+  // 场景句是唯一弹性部分：超了就按超出量收紧它，并在切点退回最近的标点，绝不切半句。
+  const MAX_PROMPT = 6980
+  const cutWords = (t: string, budget: number) => {
+    const cut = t.slice(0, Math.max(0, budget))
+    return cut.replace(/\s+\S*$/, '').replace(/[\s,;.]+$/, '').trim()
+  }
+  // 腾地方的第一顺位是**人物描述**，不是场景句：
+  // who 有身份卡 + <Picture 1> 双重兜底，压掉几十个字符不丢锁定；
+  // 场景句是用户明确要复现的六要素（墙/地/光/灯/色调），砍它=场景开飘（2026-10-24 实测只剩三项）。
+  let whoNow = who
+  let out = build(sceneOf(sceneLine), whoNow)
+  while (out.length > MAX_PROMPT && whoNow.length > 400) {
+    whoNow = cutWords(whoNow, whoNow.length - (out.length - MAX_PROMPT) - 2)
+    out = build(sceneOf(sceneLine), whoNow)
+  }
+  // 最后手段：人物描述已压到 400 底限还超，才收场景句（先退标点，再退整词）
+  while (out.length > MAX_PROMPT && sceneLine.length > 60) {
+    const over = out.length - MAX_PROMPT
+    const budget = Math.max(60, sceneLine.length - over - 2)
+    const cut = sceneLine.slice(0, budget)
+    const m = cut.match(/^[\s\S]*[,;.](\s|$)/)
+    sceneLine = (m ? m[0] : cut).replace(/[\s,;.]+$/, '').trim()
+    out = build(sceneOf(sceneLine), whoNow)
+  }
+  return out
 }
 
 
@@ -1455,6 +2709,75 @@ app.post('/projects/:id/assets/:aid/import', async (c) => {
 })
 
 /** 提取到同名资产时，选择「用素材库现有的」→ 把库里那套图片/描述/提示词并进这一行（不新建重复记录） */
+/** 换装造型变体（照短剧 `POST /characters/:id/costume-variant`）：
+ *  ① 变体是**独立资产行**（自带图/提示词/卡），基准角色一个字都不动；
+ *  ② 变体的 appearance **逐字复制**基准 → 脸的文字描述不可能被改坏；
+ *  ③ 出图走**图像编辑** `qwen-image-2.1-edit` + 全分辨率原图 → 只换衣服、脸不动。
+ *  body: { costume_label, costume_desc? } */
+app.post('/projects/:id/assets/:aid/costume-variant', async (c) => {
+  const id = Number(c.req.param('id'))
+  const aid = Number(c.req.param('aid'))
+  const base = await assetInProject(id, aid)
+  if (!base) return notFound(c, '资产不存在')
+  if (String(base.kind) !== 'character') return badRequest(c, '只有人物能换装')
+  if (!base.image) return badRequest(c, '这个人物还没有形象图 —— 先点「出图」，再换装')
+  const body: any = await c.req.json().catch(() => ({}))
+  const label = String(body.costume_label || '').trim()
+  if (!label) return badRequest(c, '造型名必填（如「正装」「晚礼服」）')
+  const desc = String(body.costume_desc || '').trim() || label
+  const baseId = Number((base as any).variantOf || aid)   // 从变体再换装时，始终挂在原始基准下
+  const vname = `${base.name}·${label}`.slice(0, 60)
+  const ts = now()
+
+  // 同名变体已存在 → 复用该行（只刷新妆造），不重复建
+  const sibs = await db.select().from(schema.mvAssets)
+    .where(and(eq(schema.mvAssets.projectId, id), eq(schema.mvAssets.variantOf, baseId)))
+  let variant = sibs.find((x: any) => String(x.name) === vname && !x.deletedAt)
+  if (variant) {
+    await db.update(schema.mvAssets).set({
+      appearance: String(base.appearance || ''),   // 🔴 每次对齐基准的脸（文字层）
+      styling: desc, costumeLabel: label, updatedAt: ts,
+    }).where(eq(schema.mvAssets.id, variant.id))
+    logTaskProgress('MV', 'costume-reuse', { id, assetId: variant.id, label })
+  } else {
+    const res = await db.insert(schema.mvAssets).values({
+      seriesId: Number((base as any).seriesId) || null,
+      projectId: id, kind: 'character', name: vname,
+      description: String(base.description || ''),
+      appearance: String(base.appearance || ''),    // 🔴 逐字复制 = 脸不变的文字保证
+      styling: desc,
+      variantOf: baseId, costumeLabel: label,
+      sortOrder: Number((base as any).sortOrder || 0) + 1,
+      createdAt: ts, updatedAt: ts,
+    })
+    const newId = Number((res as any)?.lastInsertRowid || 0)
+    variant = (await db.select().from(schema.mvAssets).where(eq(schema.mvAssets.id, newId)))[0] as any
+    logTaskProgress('MV', 'costume-created', { id, assetId: newId, label, name: vname })
+  }
+  if (!variant) return serverError(c, '变体创建失败')
+
+  // 出图：图像编辑（同步，约 50 秒）
+  try {
+    await db.update(schema.mvAssets).set({ imageStatus: 'processing', updatedAt: now() })
+      .where(eq(schema.mvAssets.id, variant.id))
+    const r = await generateCostumeBoard({
+      referenceImage: String(base.image),
+      prompt: costumeEditPrompt(label, desc),
+    })
+    await db.update(schema.mvAssets).set({
+      image: r.relativePath, imageStatus: null, updatedAt: now(),
+    }).where(eq(schema.mvAssets.id, variant.id))
+    logTaskSuccess('MV', 'costume-image', { id, assetId: variant.id, bytes: r.bytes })
+  } catch (err: any) {
+    await db.update(schema.mvAssets).set({ imageStatus: `failed:${String(err?.message || err).slice(0, 200)}`, updatedAt: now() })
+      .where(eq(schema.mvAssets.id, variant.id))
+    logTaskError('MV', 'costume-image', { id, assetId: variant.id, error: err?.message })
+    return serverError(c, `造型行已建好，但换装出图失败：${err?.message || err}`)
+  }
+  const fresh = await assetInProject(id, variant.id) || variant
+  return success(c, { asset: fresh })
+})
+
 app.post('/projects/:id/assets/:aid/use-library', async (c) => {
   const id = Number(c.req.param('id'))
   const aid = Number(c.req.param('aid'))
@@ -1475,6 +2798,51 @@ app.post('/projects/:id/assets/:aid/use-library', async (c) => {
   return success(c, { id: aid, assets: await assetsOf(id) })
 })
 
+/**
+ * 从公共素材库直接取一张已有人物/场景，在本项目建一行（2026-10-25）。
+ * 和 /assets/:aid/use-library 的区别：那条是「本项目已有这行，把库形象套上去」；
+ * 这条是「本项目还没有，直接从库里挑一个」—— 用户要的「选择已有人物/场景」按钮走这里。
+ */
+app.post('/projects/:id/assets/from-library', async (c) => {
+  const id = Number(c.req.param('id'))
+  const project = await loadProject(id)
+  if (!project) return notFound(c, 'MV 项目不存在')
+  const body = await c.req.json().catch(() => ({} as any))
+  const libId = Number(body.libraryId || 0)
+  if (!libId) return badRequest(c, '缺少 libraryId')
+  const [src] = await db.select().from(schema.mvAssets).where(eq(schema.mvAssets.id, libId))
+  if (!src) return notFound(c, '素材库里没有这条')
+  // 2026-10-28：源行可以是公共库条目，也可以是本项目其他歌的资产（选择框两批都列）
+  const kind = String((src as any).kind || '')
+  if (kind !== 'character' && kind !== 'scene') return badRequest(c, '只支持人物/场景')
+  // 本项目已经挂过同一张库卡 → 直接返回，不重复建（连点两下不出两张）
+  const dup = await db.select().from(schema.mvAssets)
+    .where(and(eq(schema.mvAssets.projectId, id), eq(schema.mvAssets.sourceAssetId, libId)))
+  if (dup.length) return success(c, { id: dup[0].id, assets: await assetsOf(id), existed: true })
+  const rows = await assetsOf(id)
+  const sameKind = rows.filter((r) => String((r as any).kind) === kind)
+  const ts = now()
+  const [inserted] = await db.insert(schema.mvAssets).values({
+    projectId: id,
+    kind,
+    name: (src as any).name,
+    description: (src as any).description,
+    appearance: (src as any).appearance,
+    styling: (src as any).styling,
+    image: (src as any).image,
+    card: (src as any).card,
+    prompt: (src as any).prompt,
+    imageStatus: (src as any).imageStatus,
+    scope: 'project',
+    sourceAssetId: libId,
+    seriesId: Number((project as any).seriesId) || null,
+    sortOrder: 100 + sameKind.length,
+    createdAt: ts, updatedAt: ts,
+  } as any).returning()
+  logTaskSuccess('MV', 'asset-from-library', { id, libraryId: libId, kind, assetId: (inserted as any)?.id })
+  return success(c, { id: (inserted as any)?.id, assets: await assetsOf(id) })
+})
+
 app.post('/projects/:id/assets/:aid/share', async (c) => {
   const id = Number(c.req.param('id'))
   const aid = Number(c.req.param('aid'))
@@ -1482,7 +2850,8 @@ app.post('/projects/:id/assets/:aid/share', async (c) => {
   if (!a0) return notFound(c, '资产不存在')
   await db.update(schema.mvAssets).set({ scope: 'library', updatedAt: now() } as any)
     .where(eq(schema.mvAssets.id, aid))
-  return success(c, { id: aid, scope: 'library' })
+  // 2026-10-25：把 assets 一起回，前端点「存到素材库」后按钮立刻变「已在素材库」，不用等下一次整页刷新
+  return success(c, { id: aid, scope: 'library', assets: await assetsOf(id) })
 })
 
 app.post('/projects/:id/assets/:aid/image', async (c) => {
@@ -2090,6 +3459,33 @@ app.post('/projects/:id/shots/:sid/prompt', async (c) => {
   if (!shot) return notFound(c, '分镜不存在')
   const { character, scene } = await primaryAssets(id)
   if (!character) return badRequest(c, '还没有人物资产（先提取人物并出图）')
+  // 舞蹈 MV：提示词是**模板化**的（动作写死复刻 <Video 1>，服装取角色资产 styling），不走 LLM。
+  // 前端「全部重写 / 重新生成 / 批量补齐」三个按钮都打这个路由，挡在入口一处即可 ——
+  // 原来的 LLM 路径每段各写一套服装/场景，跨段必然漂移（实测段1/段2 换衣）。
+  if (String(project.kind || 'song') === 'dance') {
+    const all = await db.select().from(schema.mvShots).where(eq(schema.mvShots.projectId, id))
+    const frames = Number(shot.frames) || 124
+    const shotNo = Number(shot.shotNumber) || 1
+    const en = await compileDancePromptEn({
+      characterPrompt: danceWhoText(project, character),
+      outfit: String(character?.styling || character?.appearance || '').trim(),
+      scenePrompt: project.scenePrompt || scene?.description || '',
+      style: project.style || '', styleHead: (await getStyleSpecByValue(project.style)).head,
+      frames, shotNo, totalShots: all.length || 1,
+      scenePic: danceScenePic(await shotRefs(id, shot)),
+      actionZh: danceActionText(project, shot),
+      force: true,        // 「全部重写 / 重新生成」本来就是要求重来，必须真调模型
+    })
+    const zh = compileDancePromptZh({ frames, shotNo, totalShots: all.length || 1 })
+    await db.update(schema.mvShots).set({ prompt: zh, promptEn: en, updatedAt: now() })
+      .where(eq(schema.mvShots.id, sid))
+    logTaskSuccess('MV', 'dance-prompt-template', { id, sid, chars: en.length, action_err: danceActionError || undefined })
+    return success(c, {
+      id: sid, prompt: zh, promptEn: en, engine: 'dance-template',
+      // 舞步翻译失败时提示词里就没有 moves 句 —— 不静默，直接带回前端
+      warn: danceActionError || undefined,
+    })
+  }
   const picked = (await shotRefs(id, shot)).filter((a) => a.image)
   const sc = picked.find((a) => a.kind === 'scene') || scene
   // 2026-10-19：先走 MV 自己的 video-prompt 规范；失败如实报错
@@ -2139,11 +3535,24 @@ function localPromptProblems(shot: any, mode: 'song' | 'dance' = 'song'): string
     // 舞蹈段口径：动作来自 <Video 1>，没有唱段，不套 lead singer / 谁都不唱 那套
     if (!en.includes('<Video 1>')) out.push('舞蹈提示词没点名 <Video 1> 作为动作来源')
     if (!en.includes('[video editing + reference generation + audio reuse]')) out.push('舞蹈提示词模式头不对（应为 video editing + reference generation + audio reuse）')
-    if (!/complete head/i.test(en)) out.push('舞蹈提示词没声明「有完整头部」（参考板是无头的，必须补头）')
+    if (!/complete head/i.test(en)) out.push('舞蹈提示词没声明「有完整头部」（参考板可能被画成裁头，必须补头）')
     if (!/fully_copy/.test(en)) out.push('音频必须是 fully_copy（整段复用源片原音）')
     if (/<d>|<\/d>/.test(en)) out.push('出现 <d> 台词块（MV 不许写台词/歌词）')
-    const bannedD = [...new Set((en.match(/\b(?:screen|screens|phone|phones|smartphone|tablet|mirror|mirrors|reflection|reflections|projection|poster|photograph|crowd|television|clone|duplicate|ghost)\b/gi) || []).map((x) => x.toLowerCase()))]
+    // 注意：舞蹈场景里镜子墙/地板反光都是**合法背景**（舞蹈室标配），
+    // 所以这里不吃短剧那把 mirror/reflection 的禁区词 —— 否则正式场景必报假警。
+    const bannedD = [...new Set((en.match(/\b(?:screen|screens|phone|phones|smartphone|tablet|projection|poster|photograph|crowd|television|clone|duplicate|ghost)\b/gi) || []).map((x) => x.toLowerCase()))]
     if (bannedD.length) out.push(`含禁区词：${bannedD.slice(0, 4).join(', ')}`)
+    // 🔴 2026-10-26 反转：原来锁的是否定句 `Framing is locked: no close-up, no facial shot`。
+    //    H3 是 BasicGuider + cfg=1、没有负向分支 —— 否定句不扣分，只是把 close-up / facial shot
+    //    这两个词喂进正向描述（官方 base-en/ref-en 的示例提示词里一句否定都没有）。
+    //    现在锁正向写法：全片全身 + 画面保持广。
+    if (!en.includes('the frame stays wide with the whole body inside it')) {
+      out.push('缺景别锁定句（正向：the frame stays wide with the whole body inside it）')
+    }
+    // 否定短语兜底（2026-10-26）：命中就把原句报出来 —— H3 听不懂否定，写什么反而演什么。
+    const negD = findDanceNegations(en)
+    if (negD.length) out.push(`含否定短语（H3 无负向分支，会被当正向描述）：${negD.slice(0, 4).join(' | ')}`)
+    if (en.length > 7000) out.push(`提示词 ${en.length} 字符，超 H3 上限 7000（编译时会自动收紧场景句，超说明没走模板）`)
     return out
   }
   const det = (en.split(/^detailed_description:\s*$/m)[1] || '').split(/^overall_soundscape:/m)[0]
@@ -2161,6 +3570,7 @@ function localPromptProblems(shot: any, mode: 'song' | 'dance' = 'song'): string
   if (/<d>|<\/d>/.test(en)) out.push('出现 <d> 台词块（MV 不许写台词/歌词）')
   const banned = [...new Set((en.match(/\b(?:screen|screens|phone|phones|smartphone|tablet|mirror|mirrors|reflection|reflections|projection|poster|portrait|painting|photograph|crowd|television|clone|duplicate|ghost)\b/gi) || []).map((x) => x.toLowerCase()))]
   if (banned.length) out.push(`含禁区词：${banned.slice(0, 4).join(', ')}`)
+  if (en.length > 7000) out.push(`提示词 ${en.length} 字符，超 H3 上限 7000`)
   return out
 }
 
@@ -2204,10 +3614,16 @@ app.post('/projects/:id/upscale', async (c) => {
   if (!srcRel || !fs.existsSync(getAbsolutePath(srcRel))) return badRequest(c, '还没有成片可超分 —— 先拼接')
   try {
     const rel = mvDir(id)
+    // 源成片修过脸的话，1080p 这条也是修脸版 —— 标记跟着走
+    const [srcMerge] = await db.select().from(schema.mvMerges)
+      .where(and(eq(schema.mvMerges.projectId, id), eq(schema.mvMerges.mergedUrl, srcRel)))
+    let srcTags: string[] = []
+    try { srcTags = JSON.parse(String(srcMerge?.shotIds || '[]')) } catch { srcTags = [] }
+    const inheritFace = Array.isArray(srcTags) && srcTags.includes('face') ? ['face'] : []
     const r = await upscaleVideo(srcRel, rel, 'mv_1080_')
     await db.insert(schema.mvMerges).values({
       // shot_ids 里打 `upscaled` 标记：前端据此把这条的「超分 1080p」按钮置灰，不用再去探一次分辨率
-      projectId: id, shotIds: JSON.stringify(['upscaled']), mergedUrl: r.outRel,
+      projectId: id, shotIds: JSON.stringify(['upscaled', ...inheritFace]), mergedUrl: r.outRel,
       seconds: Number(r.from.duration || 0), status: 'completed', createdAt: now(),
     })
     logTaskSuccess('MV', 'upscale', { id, from: `${r.from.w}x${r.from.h}`, to: `${r.to.w}x${r.to.h}` })
@@ -2374,6 +3790,78 @@ app.delete('/projects/:id/output', async (c) => {
   return success(c, { ok: true })
 })
 
+
+/** 舞蹈成片单独修脸：生成阶段不修脸了，拼接完成后由这里对整片修一次。
+ *  两张片子（段1/段2）拼完之后脸才统一，所以修脸必须放在这一步。 */
+app.post('/projects/:id/merges/:mid/dance-face', async (c) => {
+  const id = Number(c.req.param('id'))
+  const mid = Number(c.req.param('mid'))
+  const project = await loadProject(id)
+  if (!project) return notFound(c, 'MV 项目不存在')
+  const [m] = await db.select().from(schema.mvMerges)
+    .where(and(eq(schema.mvMerges.id, mid), eq(schema.mvMerges.projectId, id)))
+  if (!m?.mergedUrl) return notFound(c, '成片不存在')
+  const abs = getAbsolutePath(m.mergedUrl)
+  if (!fs.existsSync(abs)) return notFound(c, '成片文件不在（先拼接）')
+  const cfg = await getActiveConfig('video')
+  if (!cfg?.baseUrl) return badRequest(c, '视频服务没配置')
+  const assets = await db.select().from(schema.mvAssets).where(eq(schema.mvAssets.projectId, id))
+  const charA = assets.find((a) => a.kind === 'character' && a.image)
+  if (!charA?.image) return badRequest(c, '缺角色图，没法锁脸')
+  const mb = fs.statSync(abs).size / 1048576
+  if (mb > 48) return badRequest(c, `成片 ${mb.toFixed(1)}MB 超过 48MB，修脸接口传不动`)
+  const base = String(cfg.baseUrl).replace(/\/+$/, '')
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+  if (cfg.apiKey) headers.Authorization = `Bearer ${cfg.apiKey}`
+  let jid = ''
+  try {
+    const r = await fetch(`${base}/v2/video_generation`, {
+      method: 'POST', headers,
+      body: JSON.stringify({
+        model: 'minimax-h3-mv-dance-face',
+        video_b64: fs.readFileSync(abs).toString('base64'),
+        ref_b64: (readAsDataUrl(charA.image, 'image/png').split(',')[1] || ''),
+      }),
+    })
+    const j: any = await r.json().catch(() => ({}))
+    jid = String(j?.task_id || '')
+    if (!r.ok || !jid) return serverError(c, `修脸提交失败：${JSON.stringify(j).slice(0, 300)}`)
+  } catch (err: any) {
+    return serverError(c, `修脸提交失败：${err?.message || err}`)
+  }
+  logTaskStart('MV', 'dance-face', { id, mid, task: jid })
+  const t0 = Date.now()
+  while (Date.now() - t0 < 15 * 60 * 1000) {
+    await new Promise((r) => setTimeout(r, 5000))
+    const q: any = await fetch(`${base}/v2/query/video_generation/${jid}`, { headers })
+      .then((r) => r.json()).catch(() => null)
+    const st = String(q?.task?.status || '')
+    if (st === 'succeeded') {
+      const url = String(q?.task?.content?.url || '')
+      if (!url) return serverError(c, '修脸完成但没返回视频地址')
+      const buf = Buffer.from(await (await fetch(url)).arrayBuffer())
+      if (buf.length < 10240) return serverError(c, `修脸结果只有 ${buf.length} 字节，不可用`)
+      // 原片留底，再覆盖成片（用户点这个按钮就是要换成修脸版）
+      try { fs.copyFileSync(abs, abs.replace(/\.mp4$/i, '.before-face.mp4')) } catch { /* 留底失败不阻断 */ }
+      fs.writeFileSync(abs, buf)
+      // 打 face 标记（复用 shot_ids 数组，跟超分那条 upscaled 同一机制）—— UI 据此显示「已修脸」
+      try {
+        let tags: string[] = []
+        try { tags = JSON.parse(String(m.shotIds || '[]')) } catch { tags = [] }
+        if (!Array.isArray(tags)) tags = []
+        if (!tags.includes('face')) tags.push('face')
+        await db.update(schema.mvMerges).set({ shotIds: JSON.stringify(tags) }).where(eq(schema.mvMerges.id, mid))
+      } catch { /* 标记失败不影响修脸结果 */ }
+      logTaskSuccess('MV', 'dance-face', { id, mid, bytes: buf.length, sec: Math.round((Date.now() - t0) / 1000) })
+      return success(c, { ok: true, merged_url: m.mergedUrl, bytes: buf.length, faced: true })
+    }
+    if (st === 'failed' || st === 'error') {
+      return serverError(c, `修脸失败：${String(q?.task?.error || '').slice(0, 300)}`)
+    }
+  }
+  return serverError(c, '修脸超时（15 分钟）')
+})
+
 /** 本项目所有成片（一次拼接一条，多家并存） */
 app.get('/projects/:id/merges', async (c) => {
   const id = Number(c.req.param('id'))
@@ -2458,18 +3946,74 @@ app.post('/projects/:id/shots/:sid/render', async (c) => {
   if (isDance && (!project.danceSource || !project.danceRefSource)) {
     return badRequest(c, '舞蹈 MV 还没上传参考视频（先上传，后台会自动适配备份）')
   }
-  // 舞蹈段：提示词缺失就现场按项目的人物/场景字段编译（动作来源写死 <Video 1>）
-  if (isDance && !String(shot.promptEn || '').includes('<Video 1>')) {
+  // 舞蹈段：提示词按项目资产现场编译（动作来源写死 <Video 1>）。
+  // 每次都重编译，不再用「不含 <Video 1> 才编译」做条件 —— 旧稿一旦含 <Video 1>，
+  // 改完资产/模板后永远不更新（实测点「编译」也不生效，promptEn 停在旧 4298 字符）。
+  if (isDance) {
     const all = await db.select().from(schema.mvShots).where(eq(schema.mvShots.projectId, id))
-    const danceEn = compileDancePrompt({
-      characterPrompt: project.characterPrompt || '', scenePrompt: project.scenePrompt || '',
-      style: project.style || '', frames,
+    // 服装/场景从资产取：项目层 characterPrompt 多为空，提示词里就会退化成通用兜底句，
+    // 模型每段各自理解一遍服装 → 跨段换衣（实测段1/段2 两套衣服）。资产 styling 才是权威描述。
+    const assets = await db.select().from(schema.mvAssets).where(eq(schema.mvAssets.projectId, id))
+    const charAsset = assets.find((a) => a.kind === 'character')
+    const sceneAsset = assets.find((a) => a.kind === 'scene')
+    // 只取 styling（纯服装描述 145 字符）；appearance 是脸部外观 305 字符，塞进服装句会变成一坨无关描述
+    const outfit = String(charAsset?.styling || charAsset?.appearance || '').trim()
+    const danceEn = await compileDancePromptEn({
+      characterPrompt: danceWhoText(project, charAsset),
+      outfit,
+      scenePrompt: project.scenePrompt || sceneAsset?.description || '',
+      style: project.style || '', styleHead: (await getStyleSpecByValue(project.style)).head,
+      frames,
       shotNo: Number(shot.shotNumber) || 1, totalShots: all.length || 1,
+      scenePic: danceScenePic(picked),
+      actionZh: danceActionText(project, shot),
     })
     const danceZh = compileDancePromptZh({ frames, shotNo: Number(shot.shotNumber) || 1, totalShots: all.length || 1 })
     await db.update(schema.mvShots).set({ promptEn: danceEn, prompt: danceZh, updatedAt: now() })
       .where(eq(schema.mvShots.id, sid))
     shot.promptEn = danceEn
+  }
+  // 舞蹈续接段：整片 = 上一段 + 本段，中转贴音轨要知道上一段从源片哪一帧开始
+  // 🔴 2026-10-28（用户「你又整错了」后重算）：段起点**不能**用切分时算死的 startSeconds。
+  //   原因：中转每段实际生成 = 17k+5 网格上 ≥ 请求+5 的值（请求 158 → 生成 175 → 新内容 170 帧），
+  //   比计划多 12 帧/段；起点仍按死的 158 推进，就等于让「源片向导」和「上一段 latent」各说各话
+  //   （实测差 12~17 帧 → 模型既被要求接着上一段画、又被指到更早的画面 → 背景回退/跳帧）。
+  //   正解：起点 = 前面各段**实际交付帧数**的和（逐个从磁盘视频真数），和第几段计划多少帧无关。
+  let danceStart = 0
+  let dancePrevStart = 0
+  if (isDance) {
+    const segNo = Number(shot.shotNumber) || 1
+    if (segNo > 1) {
+      const allPrev = (await db.select().from(schema.mvShots).where(eq(schema.mvShots.projectId, id)))
+        .filter((x: any) => (Number(x.shotNumber) || 0) < segNo)
+        .sort((a: any, b: any) => (Number(a.shotNumber) || 0) - (Number(b.shotNumber) || 0))
+      for (const p of allPrev) {
+        const rel = String((p as any).videoUrl || '')
+        const n = rel ? await countVideoFrames(getAbsolutePath(rel)) : Math.round((Number((p as any).frames) || 0))
+        dancePrevStart = danceStart
+        danceStart += n
+      }
+    }
+    console.log(`[dance-chain] 段${segNo} 起点 = 前段实际交付累加 ${danceStart} 帧（上一段起点 ${dancePrevStart}）`)
+  }
+  // 本段可请求的帧数不能超过源片剩余（起点前移后末尾会不够，少给几帧比越界报错好）。
+  // 🔴 2026-10-30：原来的 `Math.max(DANCE_MIN_FRAMES, …)` 会把降下来的值强行拉回 124，
+  //   中转再 snap17_up(124+5)=141，窗口 408+141=549 > 源片 522 → ComfyUI 直接报
+  //   "h3_v2v_fractional: source becomes 115 frames at 24 fps but target needs 124"，整段失败。
+  //   根因是续接段每段实际交付 = 规划 + 12 帧左右（10-28「交付 = 整片里本段的内容全拿走」的代价），
+  //   前几段多吃，最后一段就没料。这里按「源片窗口真正能给的帧数」反解，并保证落在 17k+5 网格上。
+  const totalSrc = Number(project.danceFrames) || 0
+  let reqFrames = frames
+  if (isDance && danceStart > 0) {
+    const srcStart = Math.max(0, danceStart - DANCE_CTX)
+    const budget = totalSrc - srcStart
+    const snapUp17 = (f: number) => 5 + 17 * Math.max(1, Math.ceil((f - 5) / 17))
+    while (reqFrames > 5 && snapUp17(reqFrames + DANCE_CTX) > budget) reqFrames -= 1
+    reqFrames = 5 + 17 * Math.floor((reqFrames - 5) / 17)   // 吸附到网格（只往小取，绝不越界）
+    if (reqFrames < 5) reqFrames = 5
+    if (reqFrames !== frames) {
+      console.log(`[dance-chain] 段${shot.shotNumber} 源片窗口只剩 ${budget} 帧 → 请求帧数 ${frames} 降到 ${reqFrames}（生成 ${snapUp17(reqFrames + DANCE_CTX)}）`)
+    }
   }
   try {
     const taskId = await generateVideo({
@@ -2485,12 +4029,15 @@ app.post('/projects/:id/shots/:sid/render', async (c) => {
       mvExtras: isDance ? {
         dance_source: project.danceSource,
         dance_ref_source: project.danceRefSource,
-        dance_start_frame: Math.round((Number(shot.startSeconds) || 0) * 24),
+        dance_start_frame: danceStart,
+        dance_prev_start_frame: dancePrevStart,
         // 段序号（0 起）：第 2 段起服务端会把上一段末 39 帧钉成本段前缀，接缝不跳
         dance_seg_index: Math.max(0, (Number(shot.shotNumber) || 1) - 1),
+        // 总段数：服务端只在最后一段跑修脸（前面各段会被最后那次整片修脸覆盖，省一次修脸）
+        dance_total_segments: planDanceSegments(Number(project.danceFrames) || 0, danceMaxFrames(project.maxShotSeconds)).length,
         // 源片总帧数：续接段窗口前移后不能超出它，否则音频样本不足会报错
         dance_total_frames: Number(project.danceFrames) || 0,
-        mv_frames: frames,
+        mv_frames: reqFrames,
         mv_width: VW, mv_height: VH,
         refmod_files: cards,
       } : {
@@ -2572,21 +4119,45 @@ app.post('/projects/:id/assemble', async (c) => {
     try {
       const filesD: string[] = []
       const chainsD: string[] = []
+      const wavIns: string[] = []        // 每段裁尾时额外导出的 PCM 音轨（逐采样精确）
       let totalD = 0
       for (let i = 0; i < done.length; i++) {
         const abs = getAbsolutePath(done[i].videoUrl as string)
         filesD.push(abs)
         const sec = Number(done[i].seconds) || (Number(done[i].frames) || 124) / FPS
         const dur = await durOfD(abs)
-        const need = Math.max(1, Math.round(Math.min(sec, dur || sec) * FPS))
+        // 帧数按实测时长定：shot.seconds 是数据库里的旧值（段2 实际 8.5s / 204 帧，库里还写 8.0），
+        // 拿它当上限会白裁掉半秒（实测拼出 384 帧而不是 396）。段视频已经在落盘时裁准了。
+        const need = Math.max(1, Math.round((dur || sec) * FPS))
         chainsD.push(`[${i}:v]trim=start_frame=0,setpts=PTS-STARTPTS,tpad=stop_mode=clone:stop_duration=3,trim=end_frame=${need},setpts=PTS-STARTPTS,fps=${FPS},setsar=1[v${i}]`)
-        chainsD.push(`[${i}:a]atrim=start=0:duration=${(need / FPS).toFixed(4)},asetpts=PTS-STARTPTS,aresample=32000[a${i}]`)
+        // 音频优先用裁尾时导出的 PCM（.seg.wav）：MP4 里的 aac 按 1024 采样一块存，
+        // 装不下 158/24 = 210666.7 这种非整数采样长度，每段短几十~上百毫秒 → 拼起来后半段卡。
+        // PCM 实测能给到 210667 采样（差 0.01ms），这才是"拼接后音乐不卡"的关键。
+        const wavPath = abs.replace(/\.mp4$/i, '.seg.wav')
+        if (fs.existsSync(wavPath)) {
+          wavIns.push(wavPath)
+          // 🔴 索引必须用「视频总数 + 已加 wav 数」：ffmpeg 的 input 顺序是先全部视频、再全部 wav。
+          // 原来写 filesD.length，而它在循环里是动态增长的 —— 第 1 段算出来是 1，
+          // 指到了第 2 段的视频文件，导致成片开头播的是段2 的音频（实测 corr 与源片0秒 -0.06、
+          // 与源片6.58秒 0.9997，用户听出来"段1 像段2"）。
+          const idx = done.length + wavIns.length - 1
+          chainsD.push(`[${idx}:a]atrim=start=0:duration=${(need / FPS).toFixed(6)},asetpts=PTS-STARTPTS,aresample=32000[a${i}]`)
+          totalD += need / FPS
+          continue
+        }
+        // 没导出的段（旧片）退回 MP4 音轨；无音轨就补静音（直接写 [i:a] 会让整条 graph 失败）
+        const hasAudio = await new Promise<boolean>((res) => ffmpeg.ffprobe(abs, (e: any, m: any) =>
+          res(!e && (m?.streams || []).some((x: any) => x.codec_type === 'audio'))))
+        chainsD.push(hasAudio
+          ? `[${i}:a]atrim=start=0:duration=${(need / FPS).toFixed(4)},asetpts=PTS-STARTPTS,aresample=32000[a${i}]`
+          : `anullsrc=r=32000:cl=mono,atrim=start=0:duration=${(need / FPS).toFixed(4)},asetpts=PTS-STARTPTS[a${i}]`)
         totalD += need / FPS
       }
       const graphD = `${chainsD.join(';')};${done.map((_: any, i: number) => `[v${i}][a${i}]`).join('')}concat=n=${done.length}:v=1:a=1[vout][aout]`
       await new Promise<void>((resolve, reject) => {
         let cmd = ffmpeg()
         for (const f of filesD) cmd = cmd.input(f)
+        for (const w of wavIns) cmd = cmd.input(w)
         cmd.complexFilter(graphD)
           .outputOptions(['-map', '[vout]', '-map', '[aout]', '-c:v', 'libx264', '-crf', '20',
             '-preset', 'veryfast', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-b:a', '192k',
@@ -2606,7 +4177,17 @@ app.post('/projects/:id/assemble', async (c) => {
     await db.update(schema.mvProjects).set({ outputUrl: outRelD, status: 'done', updatedAt: now() })
       .where(eq(schema.mvProjects.id, id))
     logTaskSuccess('MV', 'assemble-dance', { id, shots: done.length })
-    return success(c, { output_url: outRelD, seconds: done.reduce((a, s) => a + (Number(s.seconds) || 0), 0) })
+    // 少段必须吭声：原来静默按勾选拼，用户以为四段都进去了（实测成片 474 帧 = 3 段，少 6.4 秒）
+    const missing = shots.length - done.length
+    return success(c, {
+      output_url: outRelD,
+      seconds: done.reduce((a, s) => a + (Number(s.seconds) || 0), 0),
+      merged_shots: done.length,
+      total_shots: shots.length,
+      warning: missing > 0 ? `只拼接了 ${done.length}/${shots.length} 段，${
+        shots.filter((s) => !done.some((d: any) => d.id === s.id)).map((s) => `段${s.shotNumber}`).join('、')
+      } 没进成片（未勾选或还没生成）` : '',
+    })
   }
   // 原曲文件丢了（实测 mv/p1/song_src.mp3 被清掉过）→ 先找同目录的 song_src.wav / .mp3 兜底，再报人话
   const songRel = (() => {
@@ -2702,4 +4283,5 @@ app.post('/projects/:id/assemble', async (c) => {
 
 export default app
 export { parseLrcLines, planSegmentsByLines, lyricsInWindow, salvageWhat, localPromptProblems, propNameKeys,
-         planDanceSegments, compileDancePrompt, compileDancePromptZh }   // 给自检脚本用
+         planDanceSegments, compileDancePrompt, compileDancePromptZh, danceActionText, danceScenePic,
+         translateDanceAction, danceSeamStart, danceMotionSeam, trimDanceSegmentTail, resnapFrameCount }   // 给自检脚本用

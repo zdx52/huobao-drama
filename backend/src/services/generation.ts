@@ -456,7 +456,7 @@ function parseTaskParams(raw: string | null | undefined): Record<string, any> {
  *  的累积值（本地单卡串行排队时，那个数把排队时间也算进了生成时间）。 */
 function withTiming(
   rawParams: string | null | undefined,
-  timing?: { genSeconds?: number; queueSeconds?: number },
+  timing?: { genSeconds?: number; queueSeconds?: number; genFrames?: number },
 ): string {
   const merged = parseTaskParams(rawParams)
   if (timing && (timing.genSeconds != null || timing.queueSeconds != null)) {
@@ -909,7 +909,7 @@ async function handleVideoComplete(
   record: SysTaskRecord,
   videoUrl: string,
   duration: number | null | undefined,
-  timing?: { genSeconds?: number; queueSeconds?: number },
+  timing?: { genSeconds?: number; queueSeconds?: number; genFrames?: number },
 ) {
   const localPath = await downloadFile(videoUrl, 'videos')
   // 海报帧供列表/封面展示，避免前端为显示首帧缓冲整个视频
